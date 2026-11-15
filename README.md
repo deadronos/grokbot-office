@@ -116,8 +116,13 @@ curl -sS -X POST http://127.0.0.1:8787/api/bots/register \
 ```
 
 Heartbeat (keep-alive; the optional `status` is one of `idle`, `working`,
-`waiting`, `reviewing`, `offline`; an empty body is fine). A bot with no heartbeat
-for `timeoutSec` counts as offline (marked by the heartbeat sweeper, #9):
+`waiting`, `reviewing`, `offline`; an empty body is fine). A heartbeat is only a
+keep-alive: work state comes from events, so a live bot is never changed by it.
+The server sweeps stale heartbeats every 15 seconds. A bot whose last heartbeat is
+older than `timeoutSec` is marked `offline` (its work state is not), its task,
+label and handoff links are cleared, its `since` moves, and the server appends an
+`offline` event that viewers receive over SSE. A bot that is already offline is
+left alone, and so is a bot with no status row (not yet online).
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots/data/heartbeat \
@@ -172,6 +177,14 @@ batch with `422 {"error":"invalid event","index":1}`.
 
 Times are the server's: `received_at` is one timestamp per batch. The client `at`
 is display-only and is clamped to ±10 minutes around it.
+
+The event log is pruned: once at startup and then every 24 hours the server deletes
+events older than `RETENTION_DAYS` (default 90), then closed handoffs (`accepted` or
+`cancelled`) whose accept time (or send time, if never accepted) is older than the
+same window. Open (`sent`) handoffs are never pruned, and a closed handoff that a
+remaining event or a live bot's `bot_status` links to is kept. `RETENTION_DAYS` must
+be a positive integer, otherwise the server refuses to start. Pruning leaves gaps in
+`seq`, like hidden bots' events do.
 
 ## Viewer API
 
