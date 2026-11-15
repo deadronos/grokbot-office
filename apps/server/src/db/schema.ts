@@ -28,7 +28,6 @@ export const bots = sqliteTable(
     role: text("role").notNull(),
     avatar: text("avatar").notNull(),
     pod: text("pod", { enum: PODS }).notNull(),
-    deskIndex: integer("desk_index"),
     hidden: integer("hidden", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

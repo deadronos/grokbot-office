@@ -10,6 +10,7 @@ import type { Repo } from "./db/repo.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { botRoutes } from "./routes/bots.ts";
 import { eventRoutes } from "./routes/events.ts";
+import { stateRoutes } from "./routes/state.ts";
 
 export const SERVICE_NAME = "grokbot-office-server";
 
@@ -46,7 +47,8 @@ export function createApp({
   app.use("/api/admin/*", requireAdmin({ adminToken }));
   app.route("/api/admin", adminRoutes(repo));
   app.route("/api/bots", botRoutes(repo, heartbeat));
-  app.route("/api/events", eventRoutes(repo));
+  app.route("/api/events", eventRoutes({ repo, adminToken }));
+  app.route("/api/state", stateRoutes({ repo, adminToken }));
 
   return app;
 }
