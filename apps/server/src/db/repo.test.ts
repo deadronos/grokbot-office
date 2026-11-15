@@ -219,6 +219,8 @@ describe("SQLite repository", () => {
       const first = openDatabase(path);
       expect(first.pragma("journal_mode", { simple: true })).toBe("wal");
       expect(first.pragma("foreign_keys", { simple: true })).toBe(1);
+      // WAL + NORMAL: durable across app crashes, may lose the last commits on power loss.
+      expect(first.pragma("synchronous", { simple: true })).toBe(1);
       createSqliteRepo(first).upsertBot(bot("a"));
       first.close();
       const second = openDatabase(path);

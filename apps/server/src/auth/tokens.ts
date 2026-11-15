@@ -1,12 +1,15 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
+import { TOKEN_KINDS as TOKEN_KIND_VALUES, type TokenKind } from "@grokbot-office/shared";
+
 import type { Repo } from "../db/repo.ts";
+import { nowUtc } from "../time.ts";
 
 export const TOKEN_BYTES = 32;
 /** Stored prefix length; long enough to tell tokens apart, short enough not to narrow a guess. */
 export const TOKEN_PREFIX_LENGTH = 8;
-export const TOKEN_KINDS = ["admin", "bot", "viewer"] as const;
-export type TokenKind = (typeof TOKEN_KINDS)[number];
+export const TOKEN_KINDS = TOKEN_KIND_VALUES;
+export type { TokenKind };
 
 /** `.env.example` ships this placeholder; the server refuses admin access until it is replaced. */
 export const ADMIN_TOKEN_PLACEHOLDER = "change-me";
@@ -54,7 +57,7 @@ export function issueToken(
     botId,
     prefix,
     hash: hashToken(token),
-    createdAt: new Date().toISOString(),
+    createdAt: nowUtc(),
     lastUsedAt: null,
     revokedAt: null,
   });

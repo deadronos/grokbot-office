@@ -1,6 +1,7 @@
 import { createMiddleware } from "hono/factory";
 
 import type { Repo, Token } from "../db/repo.ts";
+import { nowUtc } from "../time.ts";
 import type { TokenKind } from "./tokens.ts";
 import { extractBearerToken, hashToken, isAdminTokenUsable, secretsEqual } from "./tokens.ts";
 
@@ -62,7 +63,7 @@ export function requireToken({
       return reject(403, "token bound to another bot");
     }
 
-    repo.touchToken(token.id, new Date().toISOString());
+    repo.touchToken(token.id, nowUtc());
     c.set("token", token);
     await next();
   });

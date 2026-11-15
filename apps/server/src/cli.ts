@@ -5,6 +5,7 @@ import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
 import type { Repo } from "./db/repo.ts";
 import { createSqliteRepo } from "./db/repo.ts";
+import { nowUtc } from "./time.ts";
 
 const USAGE = `usage:
   token create --kind <bot|viewer> [--bot <slug>]
@@ -60,7 +61,7 @@ export function tokenRevoke(repo: Repo, args: string[], out: Output): void {
   const id = args[0];
   if (!id) throw new Error("token revoke needs a token id");
   if (!repo.getToken(id)) throw new Error(`unknown token "${id}"`);
-  repo.revokeToken(id, new Date().toISOString());
+  repo.revokeToken(id, nowUtc());
   out(`Revoked token ${id}.`);
 }
 
