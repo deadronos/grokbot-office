@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { main, tokenCreate, tokenList, tokenRevoke, runCli } from "./cli.ts";
+import { isEntryModule, main, tokenCreate, tokenList, tokenRevoke, runCli } from "./cli.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
 import { botRecord, testSetup } from "./test-utils.ts";
@@ -132,5 +133,21 @@ describe("admin CLI process", () => {
       if (previous === undefined) delete process.env.DATABASE_PATH;
       else process.env.DATABASE_PATH = previous;
     }
+  });
+});
+
+describe("isEntryModule", () => {
+  it("matches the entry file through a symlinked path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "go-cli-entry-"));
+    dirs.push(dir);
+    const real = join(dir, "cli.js");
+    writeFileSync(real, "");
+    const link = join(dir, "link.js");
+    symlinkSync(real, link);
+    const url = pathToFileURL(real).href;
+    expect(isEntryModule(real, url)).toBe(true);
+    expect(isEntryModule(link, url)).toBe(true);
+    expect(isEntryModule(join(dir, "other.js"), url)).toBe(false);
+    expect(isEntryModule(undefined, url)).toBe(false);
   });
 });

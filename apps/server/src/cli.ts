@@ -1,10 +1,11 @@
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 
 import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
 import type { Repo } from "./db/repo.ts";
 import { createSqliteRepo } from "./db/repo.ts";
+import { nowUtc } from "./time.ts";
 
 const USAGE = `usage:
   token create --kind <bot|viewer> [--bot <slug>]
@@ -60,7 +61,7 @@ export function tokenRevoke(repo: Repo, args: string[], out: Output): void {
   const id = args[0];
   if (!id) throw new Error("token revoke needs a token id");
   if (!repo.getToken(id)) throw new Error(`unknown token "${id}"`);
-  repo.revokeToken(id, new Date().toISOString());
+  repo.revokeToken(id, nowUtc());
   out(`Revoked token ${id}.`);
 }
 
@@ -92,9 +93,21 @@ export function main(
   }
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (invokedDirectly) {
+/**
+ * Node resolves symlinks for the entry module's URL but not for argv[1], so compare
+ * real paths: otherwise `node /tmp/.../cli.js` on macOS (/tmp → /private/tmp) or a
+ * symlinked install silently does nothing.
+ */
+export function isEntryModule(argv1: string | undefined, moduleUrl: string): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryModule(process.argv[1], import.meta.url)) {
   // `pnpm admin ...` forwards arguments after its own `--`.
   const argv = process.argv.slice(2);
   if (argv[0] === "--") argv.shift();

@@ -6,6 +6,7 @@ import { BotId, RegisterBody } from "@grokbot-office/shared";
 import type { AppEnv } from "../auth/middleware.ts";
 import { issueToken } from "../auth/tokens.ts";
 import type { Repo, Token } from "../db/repo.ts";
+import { nowUtc } from "../time.ts";
 
 const CreateTokenBody = z
   .object({
@@ -61,7 +62,7 @@ export function adminRoutes(repo: Repo) {
   api.delete("/tokens/:id", (c) => {
     const id = c.req.param("id");
     if (!repo.getToken(id)) return c.json({ error: "unknown token" }, 404);
-    repo.revokeToken(id, new Date().toISOString());
+    repo.revokeToken(id, nowUtc());
     return c.json({ ok: true });
   });
 
@@ -71,7 +72,7 @@ export function adminRoutes(repo: Repo) {
     if (!repo.getBot(id)) return c.json({ error: "unknown bot" }, 404);
     const parsed = PatchBotBody.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
-    const updated = repo.updateBot(id, { ...parsed.data, updatedAt: new Date().toISOString() });
+    const updated = repo.updateBot(id, { ...parsed.data, updatedAt: nowUtc() });
     return c.json(updated);
   });
 

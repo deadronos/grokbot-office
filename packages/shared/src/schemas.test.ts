@@ -64,9 +64,9 @@ describe("RegisterBody", () => {
     expect(RegisterBody.safeParse({ ...register, avatar: "a".repeat(61) }).success).toBe(false);
   });
 
-  it("drops unknown keys", () => {
-    const parsed = RegisterBody.parse({ ...register, extra: "nope", hidden: true });
-    expect(Object.keys(parsed).toSorted()).toEqual(["avatar", "id", "name", "pod", "role"]);
+  it("rejects unknown keys", () => {
+    expect(RegisterBody.safeParse({ ...register, extra: "nope" }).success).toBe(false);
+    expect(RegisterBody.safeParse({ ...register, hidden: true }).success).toBe(false);
   });
 });
 
@@ -76,8 +76,9 @@ describe("HeartbeatBody", () => {
     expect(HeartbeatBody.safeParse({ status: "working" }).success).toBe(true);
   });
 
-  it("rejects an unknown status", () => {
+  it("rejects an unknown status or an unknown key", () => {
     expect(HeartbeatBody.safeParse({ status: "busy" }).success).toBe(false);
+    expect(HeartbeatBody.safeParse({ statu: "working" }).success).toBe(false);
   });
 });
 
@@ -127,16 +128,9 @@ describe("EventIn", () => {
     expect(EventIn.safeParse({ ...event, at: "yesterday" }).success).toBe(false);
   });
 
-  it("drops unknown keys", () => {
-    const parsed = EventIn.parse({ ...event, evil: "drop me", seq: 99 });
-    expect(Object.keys(parsed).toSorted()).toEqual([
-      "at",
-      "botId",
-      "eventId",
-      "label",
-      "taskId",
-      "type",
-    ]);
+  it("rejects unknown keys", () => {
+    expect(EventIn.safeParse({ ...event, evil: "drop me" }).success).toBe(false);
+    expect(EventIn.safeParse({ ...event, seq: 99 }).success).toBe(false);
   });
 });
 
@@ -178,24 +172,32 @@ describe("label and ref limits", () => {
 });
 
 describe("task and handoff ids", () => {
-  it("sanitizes taskId and keeps 120 chars max", () => {
-    expect(EventIn.parse({ ...event, taskId: "bo\nplan" }).taskId).toBe("bo plan");
-    expect(EventIn.parse({ ...event, taskId: "bo\u200Bplan" }).taskId).toBe("boplan");
+  it("keeps taskId verbatim and caps it at 120 chars", () => {
+    expect(EventIn.parse({ ...event, taskId: "bo plan" }).taskId).toBe("bo plan");
     expect(EventIn.safeParse({ ...event, taskId: "a".repeat(120) }).success).toBe(true);
     expect(EventIn.safeParse({ ...event, taskId: "a".repeat(121) }).success).toBe(false);
-    expect(EventIn.safeParse({ ...event, taskId: "\u200B\t" }).success).toBe(false);
   });
 
-  it("sanitizes handoffId and keeps 120 chars max", () => {
-    const sent = EventIn.parse({
-      ...event,
-      type: "handoff_sent",
-      to: "lumi",
-      handoffId: "h\u200B-\n42",
+  it("rejects control, format and padding instead of cleaning them", () => {
+    for (const taskId of ["bo\nplan", "bo\u200Bplan", "\u200B\t", " bo", "bo ", ""]) {
+      expect(EventIn.safeParse({ ...event, taskId }).success).toBe(false);
+    }
+    // The point of the rule: an invisible character must not collapse two ids into one.
+    expect(EventIn.safeParse({ ...event, taskId: "task\u200B1" }).success).toBe(false);
+    expect(EventIn.parse({ ...event, taskId: "task1" }).taskId).toBe("task1");
+  });
+
+  it("rejects a handoffId that would need cleaning", () => {
+    expect(
+      EventIn.safeParse({ ...event, type: "handoff_accepted", handoffId: "h\u200B42" }).success,
+    ).toBe(false);
+    expect(
+      EventIn.safeParse({ ...event, type: "handoff_sent", to: "lumi", handoffId: "h-42\n" })
+        .success,
+    ).toBe(false);
+    expect(EventIn.parse({ ...event, type: "handoff_accepted", handoffId: "h-42" })).toMatchObject({
+      handoffId: "h-42",
     });
-    expect(sent).toMatchObject({ handoffId: "h- 42" });
-    const accepted = EventIn.parse({ ...event, type: "handoff_accepted", handoffId: "h\u200B42" });
-    expect(accepted).toMatchObject({ handoffId: "h42" });
     expect(
       EventIn.safeParse({ ...event, type: "handoff_accepted", handoffId: "a".repeat(121) }).success,
     ).toBe(false);
@@ -225,6 +227,11 @@ describe("EventsBatch", () => {
     expect(EventsBatch.safeParse({ events: [event, { ...event, type: "offline" }] }).success).toBe(
       false,
     );
+  });
+
+  it("rejects unknown keys on the batch and on an event", () => {
+    expect(EventsBatch.safeParse({ ...batch(1), seq: 1 }).success).toBe(false);
+    expect(EventsBatch.safeParse({ events: [{ ...event, result: "done" }] }).success).toBe(false);
   });
 });
 
@@ -306,12 +313,12 @@ describe("StreamEvent", () => {
     expect(StreamEvent.safeParse({ seq: 0, ...event, receivedAt: AT }).success).toBe(false);
   });
 
-  it("sanitizes handoffId", () => {
+  it("keeps a clean handoffId verbatim on a stored stream event", () => {
     const parsed = StreamEvent.parse({
       seq: 1234,
       ...event,
-      type: "handoff_sent",
-      handoffId: "h\u200B42",
+      type: "handoff_accepted",
+      handoffId: "h42",
       receivedAt: AT,
     });
     expect(parsed.handoffId).toBe("h42");

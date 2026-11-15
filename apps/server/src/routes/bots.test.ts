@@ -120,6 +120,7 @@ describe("POST /api/bots/register", () => {
       label: null,
       taskId: null,
       handoffTo: null,
+      handoffId: null,
       since: old,
       lastHeartbeatAt: old,
       lastEventSeq: null,
@@ -195,6 +196,7 @@ describe("POST /api/bots/:id/heartbeat", () => {
       label: null,
       taskId: null,
       handoffTo: null,
+      handoffId: null,
       since: old,
       lastHeartbeatAt: old,
       lastEventSeq: null,
@@ -205,9 +207,13 @@ describe("POST /api/bots/:id/heartbeat", () => {
     expect(same?.since).toBe(old);
     expect(Date.parse(same?.lastHeartbeatAt ?? "")).toBeGreaterThan(Date.parse(old));
 
+    // Derived working can't be overridden by a heartbeat, except with offline.
     await heartbeat(app, "data", dataToken, { status: "reviewing" });
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "working", since: old });
+
+    await heartbeat(app, "data", dataToken, { status: "offline" });
     const changed = repo.getBotStatus("data");
-    expect(changed?.status).toBe("reviewing");
+    expect(changed?.status).toBe("offline");
     expect(Date.parse(changed?.since ?? "")).toBeGreaterThan(Date.parse(old));
   });
 

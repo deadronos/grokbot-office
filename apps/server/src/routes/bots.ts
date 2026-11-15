@@ -6,6 +6,7 @@ import type { AppEnv } from "../auth/middleware.ts";
 import { requireToken } from "../auth/middleware.ts";
 import type { HeartbeatConfig } from "../config.ts";
 import type { Repo } from "../db/repo.ts";
+import { nowUtc } from "../time.ts";
 
 /**
  * Bot-facing API. Both routes only trust a bot token bound to the bot being
@@ -28,7 +29,7 @@ export function botRoutes(repo: Repo, heartbeat: HeartbeatConfig) {
       return c.json({ error: "forbidden" }, 403);
     }
 
-    repo.registerBot(bot, new Date().toISOString());
+    repo.registerBot(bot, nowUtc());
     return c.json({
       id: bot.id,
       heartbeatIntervalSec: heartbeat.intervalSec,
@@ -53,7 +54,7 @@ export function botRoutes(repo: Repo, heartbeat: HeartbeatConfig) {
     const parsed = HeartbeatBody.safeParse(raw);
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
 
-    repo.touchHeartbeat(id, parsed.data.status, new Date().toISOString());
+    repo.touchHeartbeat(id, parsed.data.status, nowUtc());
     return c.body(null, 204);
   });
 

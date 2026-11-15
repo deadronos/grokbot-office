@@ -45,7 +45,21 @@ export function openDatabase(path = resolveDatabasePath()): Database.Database {
   try {
     db.pragma("foreign_keys = ON");
     db.pragma("journal_mode = WAL");
+    // WAL + NORMAL trades an fsync per commit for losing only the last transactions on power loss.
+    db.pragma("synchronous = NORMAL");
+    // SQLite cannot add CHECK or foreign-key constraints in place, so migrations rebuild
+    // tables by copy/drop/rename. That needs enforcement off: the migrator wraps every
+    // pending migration in one transaction, so a pragma inside the .sql file cannot
+    // change it, and the deferred checks left by the dropped tables fail the COMMIT.
+    // Every query after this point runs with enforcement back on.
+    db.pragma("foreign_keys = OFF");
     migrate(drizzle(db), { migrationsFolder: migrationsFolder() });
+    db.pragma("foreign_keys = ON");
+    // With enforcement off during the rebuild, prove nothing dangling was left behind.
+    const violations = db.pragma("foreign_key_check") as unknown[];
+    if (violations.length > 0) {
+      throw new Error(`database has ${violations.length} foreign key violation(s) after migrating`);
+    }
     return db;
   } catch (error) {
     db.close();

@@ -29,6 +29,11 @@ export const PODS = ["command", "dev", "ops"] as const;
 export const podSchema = z.enum(PODS);
 export type Pod = z.infer<typeof podSchema>;
 
+/** Token kinds; `admin` is env-only (`ADMIN_TOKEN`) and is never issued or stored. */
+export const TOKEN_KINDS = ["admin", "bot", "viewer"] as const;
+export const tokenKindSchema = z.enum(TOKEN_KINDS);
+export type TokenKind = z.infer<typeof tokenKindSchema>;
+
 export const HANDOFF_STATES = ["sent", "accepted", "cancelled"] as const;
 export const handoffStateSchema = z.enum(HANDOFF_STATES);
 export type HandoffState = z.infer<typeof handoffStateSchema>;
