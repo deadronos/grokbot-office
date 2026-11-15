@@ -190,6 +190,31 @@ describe("POST /api/session", () => {
     expect((await state(cookieHeader(third))).status).toBe(200);
   });
 
+  it("does not count idle sessions against the cap", async () => {
+    const context = testSetup({ session: { maxPerToken: 2, idleSec: 60 } });
+    cleanups.push(context.close);
+    const { app, db, repo } = context;
+    const viewer = issueToken(repo, { kind: "viewer" });
+
+    const first = await sessionOf(app, viewer.token);
+    const second = await sessionOf(app, viewer.token);
+    const oldest = sessionRows(db).toSorted((a, b) => a.created_at.localeCompare(b.created_at))[0];
+    db.prepare("update sessions set last_seen_at = ? where id = ?").run(
+      "2000-01-01T00:00:00.000Z",
+      oldest.id,
+    );
+
+    const third = await sessionOf(app, viewer.token);
+
+    const state = (cookie: string) => app.request("/api/state", { headers: { cookie } });
+    // The idle cookie is already 401; a new one must not evict the still-active second.
+    expect((await state(cookieHeader(first))).status).toBe(401);
+    expect((await state(cookieHeader(second))).status).toBe(200);
+    expect((await state(cookieHeader(third))).status).toBe(200);
+    const idle = sessionRows(db).find((row) => row.id === oldest.id);
+    expect(idle?.revoked_at).toBeNull();
+  });
+
   it("keeps five sessions by default", async () => {
     const { app, viewer } = setup();
     const cookies: string[] = [];
@@ -387,7 +412,10 @@ describe("POST /api/session/logout cross-site guard", () => {
     const { app, db, viewer } = setup();
     const { secret } = sessionCookie(await postSession(app, viewer.token));
 
-    const res = await postLogout(app, { cookie: cookieHeader(secret), origin: "https://evil.example" });
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://evil.example",
+    });
     expect(res.status).toBe(403);
     expect((await res.json()) as object).toEqual({ error: "forbidden" });
     expect(sessionRows(db)[0].revoked_at).toBeNull();
@@ -411,7 +439,10 @@ describe("POST /api/session/logout cross-site guard", () => {
     const { app, db, viewer } = setup();
     const { secret } = sessionCookie(await postSession(app, viewer.token));
 
-    const res = await postLogout(app, { cookie: cookieHeader(secret), "sec-fetch-site": "cross-site" });
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      "sec-fetch-site": "cross-site",
+    });
     expect(res.status).toBe(403);
     expect(sessionRows(db)[0].revoked_at).toBeNull();
   });

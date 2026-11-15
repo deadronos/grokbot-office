@@ -29,9 +29,11 @@ export function createSession(
   now: string,
   ttlSec: number,
   maxPerToken: number,
+  idleSec: number,
 ): CreatedSession {
   const secret = randomBytes(SESSION_SECRET_BYTES).toString("base64url");
   const expiresAt = toUtc(new Date(Date.parse(now) + ttlSec * 1000));
+  const idleCutoff = toUtc(new Date(Date.parse(now) - idleSec * 1000));
   repo.insertSessionCapped(
     {
       id: randomUUID(),
@@ -44,6 +46,7 @@ export function createSession(
     },
     maxPerToken,
     now,
+    idleCutoff,
   );
   return { secret, expiresAt };
 }

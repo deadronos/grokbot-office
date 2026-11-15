@@ -140,9 +140,12 @@ export function createApp({
 
   if (surface !== "all") {
     // A surface is a hard allowlist, so a leaked Funnel URL cannot reach viewer data.
+    // Health is on both ports so a serve/Funnel probe still has something to hit.
     app.use("/api/*", async (c, next) => {
-      const allowed =
-        surface === "bot"
+      const health = c.req.method === "GET" && c.req.path === HEALTH_PATH;
+      const allowed = health
+        ? true
+        : surface === "bot"
           ? isBotEndpoint(c.req.method, c.req.path)
           : !isBotEndpoint(c.req.method, c.req.path);
       if (!allowed) return c.json({ error: "not found" }, 404);
@@ -173,6 +176,7 @@ export function createApp({
       adminToken,
       sessionTtlSec: session.ttlSec,
       sessionMaxPerToken: session.maxPerToken,
+      sessionIdleSec: session.idleSec,
       corsOrigins,
     }),
   );

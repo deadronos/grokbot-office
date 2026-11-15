@@ -170,6 +170,15 @@ describe("rate limits", () => {
     expect((await probe()).status).toBe(401);
     expect((await probe()).status).toBe(429);
   });
+
+  it("limits unauthenticated logout by IP", async () => {
+    const { app } = rateLimitedApp();
+    const probe = () => app.request("/api/session/logout", { method: "POST" });
+
+    expect((await probe()).status).toBe(204);
+    expect((await probe()).status).toBe(204);
+    expect((await probe()).status).toBe(429);
+  });
 });
 
 describe("surfaces", () => {
@@ -239,5 +248,6 @@ describe("surfaces", () => {
     expect(heartbeat.status).toBe(404);
     // The viewer's own replay endpoint stays reachable on this surface.
     expect((await app.request("/api/events?since=0")).status).toBe(401);
+    expect((await app.request(HEALTH_PATH)).status).toBe(200);
   });
 });

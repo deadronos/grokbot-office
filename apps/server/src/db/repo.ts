@@ -6,6 +6,7 @@ import {
   desc,
   eq,
   gt,
+  gte,
   inArray,
   isNull,
   lt,
@@ -150,7 +151,12 @@ export interface Repo {
    * revokes this token's oldest live sessions until there is room for the cap.
    * Returns how many live sessions were evicted.
    */
-  insertSessionCapped(session: Session, maxPerToken: number, now: string): number;
+  insertSessionCapped(
+    session: Session,
+    maxPerToken: number,
+    now: string,
+    idleCutoff: string,
+  ): number;
   findSessionByHash(hash: string): Session | undefined;
   /** Revocation is idempotent: the first timestamp wins. */
   revokeSession(id: string, revokedAt: string): void;
@@ -659,7 +665,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     insertSession: (session) => {
       db.insert(sessions).values(session).run();
     },
-    insertSessionCapped: (session, maxPerToken, now) =>
+    insertSessionCapped: (session, maxPerToken, now, idleCutoff) =>
       db.transaction((tx) => {
         // Dead rows never count toward the cap and must not linger: this drops every
         // session that is already expired, not just the day-old ones the old cleanup took.
@@ -672,6 +678,8 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
               eq(sessions.tokenId, session.tokenId),
               isNull(sessions.revokedAt),
               gt(sessions.expiresAt, now),
+              // Idle-expired cookies already 401; they must not push a live session out.
+              gte(sessions.lastSeenAt, idleCutoff),
             ),
           )
           // ISO text order is time order, so this is oldest `created_at` first. Sessions
