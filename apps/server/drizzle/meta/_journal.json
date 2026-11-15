@@ -15,6 +15,13 @@
       "when": 1794730365160,
       "tag": "0001_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794731605102,
+      "tag": "0002_waiting_handoff",
+      "breakpoints": true
     }
   ]
 }

@@ -31,6 +31,30 @@ export class InvalidEventError extends Error {
   }
 }
 
+/** Statuses that end any task or handoff the bot was tied to. */
+const RESTING_STATUSES: readonly Status["status"][] = ["idle", "offline"];
+/** States derived from task/handoff events; a heartbeat may only override them with `offline`. */
+const DERIVED_STATUSES: readonly Status["status"][] = ["working", "waiting"];
+
+/** Fields cleared whenever a bot comes to rest, so an idle bot never holds a task. */
+const RELEASED_LINKS = { taskId: null, label: null, handoffTo: null, handoffId: null } as const;
+
+/**
+ * The status a heartbeat leaves behind. A heartbeat is a keep-alive, not a task event:
+ * it cannot end derived `working`/`waiting` (only events or `offline` can), and moving
+ * to `idle`/`offline` releases the task and handoff links.
+ */
+export function heartbeatPatch(
+  current: Pick<Status, "status"> | undefined,
+  status: Status["status"] | undefined,
+): Partial<Status> | undefined {
+  if (status === undefined || status === current?.status) return undefined;
+  if (current && DERIVED_STATUSES.includes(current.status) && status !== "offline") {
+    return undefined;
+  }
+  return RESTING_STATUSES.includes(status) ? { status, ...RELEASED_LINKS } : { status };
+}
+
 function clampClientAt(at: string | undefined, now: string): string | null {
   if (at === undefined) return null;
   const received = Date.parse(now);
@@ -45,7 +69,10 @@ export interface Repo {
   upsertBot(bot: Bot): void;
   /** Upserts the bot-owned profile fields and refreshes the heartbeat; one transaction. */
   registerBot(bot: Pick<Bot, "id" | "name" | "role" | "avatar" | "pod">, now: string): void;
-  /** Refreshes the heartbeat and, when the status changed, sets it and resets `since`. */
+  /**
+   * Refreshes the heartbeat and applies its status per `heartbeatPatch` (it cannot end
+   * derived working/waiting except with `offline`); `since` resets only on a change.
+   */
   touchHeartbeat(botId: string, status: Status["status"] | undefined, now: string): void;
   getBot(id: string): Bot | undefined;
   listBots(): Bot[];
@@ -107,13 +134,14 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .from(botStatus)
           .where(eq(botStatus.botId, botId))
           .get();
+        const patch = heartbeatPatch(existing, status);
         if (!existing) {
           tx.insert(botStatus)
             .values({ botId, status: status ?? "idle", since: now, lastHeartbeatAt: now })
             .run();
-        } else if (status !== undefined && status !== existing.status) {
+        } else if (patch) {
           tx.update(botStatus)
-            .set({ status, since: now, lastHeartbeatAt: now })
+            .set({ ...patch, since: now, lastHeartbeatAt: now })
             .where(eq(botStatus.botId, botId))
             .run();
         } else {
@@ -166,10 +194,14 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .get() as Status;
 
         // `since` only moves when the status itself moves.
+        // Coming to rest (idle/offline) always releases task and handoff links;
+        // an explicit label in the same patch (status_changed) still applies.
         const change = (patch: Partial<Status>) => {
           const next = patch.status ?? status.status;
+          const released = RESTING_STATUSES.includes(next) ? RELEASED_LINKS : {};
           status = {
             ...status,
+            ...released,
             ...patch,
             status: next,
             since: next === status.status ? status.since : now,
@@ -202,10 +234,16 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                 label: input.label ?? null,
               });
               break;
-            case "task_finished":
-              // The result lives on the event only; finishing releases task and handoff links.
-              change({ status: "idle", taskId: null, label: null, handoffTo: null });
+            case "task_finished": {
+              // The result lives on the event only. Finishing a task the bot is not on
+              // (both ids known and different) is recorded but leaves the current work alone.
+              const otherTask =
+                input.taskId !== undefined &&
+                status.taskId !== null &&
+                input.taskId !== status.taskId;
+              if (!otherTask) change({ status: "idle" });
               break;
+            }
             case "handoff_sent": {
               if (input.to === botId) throw new InvalidEventError(index, "handoff to self");
               const target = tx
@@ -238,6 +276,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   status: "waiting",
                   taskId: null,
                   handoffTo: input.to,
+                  handoffId: input.handoffId,
                   label: input.label ?? null,
                 });
               }
@@ -264,16 +303,18 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   taskId: input.taskId ?? null,
                   label: handoff.label ?? input.label ?? null,
                   handoffTo: null,
+                  handoffId: null,
                 });
                 const sender = tx
                   .select()
                   .from(botStatus)
                   .where(eq(botStatus.botId, handoff.fromBotId))
                   .get();
-                // The sender was only waiting for this; being accepted releases it.
-                if (sender && sender.status === "waiting" && sender.handoffTo === botId) {
+                // Only the handoff the sender is waiting on releases it; accepting a
+                // side handoff to the same receiver leaves it waiting.
+                if (sender && sender.status === "waiting" && sender.handoffId === handoff.id) {
                   tx.update(botStatus)
-                    .set({ status: "idle", since: now, handoffTo: null })
+                    .set({ status: "idle", since: now, ...RELEASED_LINKS })
                     .where(eq(botStatus.botId, sender.botId))
                     .run();
                 }
@@ -316,6 +357,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
             label: status.label,
             taskId: status.taskId,
             handoffTo: status.handoffTo,
+            handoffId: status.handoffId,
             since: status.since,
             // Any batch counts as a heartbeat, even one that was entirely duplicates.
             lastHeartbeatAt: now,

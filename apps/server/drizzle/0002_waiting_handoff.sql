@@ -1,0 +1,1 @@
+ALTER TABLE `bot_status` ADD `handoff_id` text REFERENCES handoffs(id);

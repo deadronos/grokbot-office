@@ -152,15 +152,18 @@ heartbeat.
 
 The server derives `bot_status` from the events, in order:
 
-| Event              | Status after it                                                                                     |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `status_changed`   | that status, with its `label`                                                                       |
-| `task_started`     | `working`, `task_id` = the event's                                                                  |
-| `task_finished`    | `idle`; `task_id` and `label` are cleared                                                           |
-| `handoff_sent`     | `waiting` with `handoff_to`, unless another task is still open                                      |
-| `handoff_accepted` | `working` for the receiver (task = the event's `taskId`); a sender still waiting for it goes `idle` |
+| Event              | Status after it                                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `status_changed`   | that status, with its `label`                                                                                                 |
+| `task_started`     | `working`, `task_id` = the event's                                                                                            |
+| `task_finished`    | `idle` (task and handoff links cleared); with a `taskId` that is not the current task it is recorded and the status stays     |
+| `handoff_sent`     | `waiting` on that handoff (`handoff_to`, `handoff_id`), unless another task is still open                                     |
+| `handoff_accepted` | `working` for the receiver (task = the event's `taskId`); the sender goes `idle` only if this is the handoff it is waiting on |
 
-`since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
+Whenever a bot comes to rest (`idle` or `offline`, from an event or a heartbeat) its
+`task_id`, `label`, `handoff_to` and `handoff_id` are cleared; a `status_changed` label
+still applies. A heartbeat `status` cannot end a derived `working`/`waiting` state unless
+it is `offline`. `since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
 (`sent` → `accepted`). An event the server cannot apply (a handoff to itself or to an
 unknown bot, a reused `handoffId`, a handoff the bot may not accept) fails the whole
 batch with `422 {"error":"invalid event","index":1}`.

@@ -56,6 +56,7 @@ describe("POST /api/events", () => {
       label: null,
       taskId: null,
       handoffTo: null,
+      handoffId: null,
       since: NOW,
       lastHeartbeatAt: NOW,
       lastEventSeq: null,
@@ -183,6 +184,108 @@ describe("POST /api/events", () => {
     );
     expect(res.status).toBe(200);
     expect(repo.getBotStatus("wesley")).toMatchObject({ status: "working", taskId: "review-h2" });
+  });
+
+  it("releases task and handoff links when status_changed brings a bot to rest", async () => {
+    const { app, repo, dataToken } = setup();
+    await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t1", label: "Plan" })));
+    await post(app, dataToken, batch(ev(2, "status_changed", { status: "idle" })));
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "idle",
+      taskId: null,
+      label: null,
+      handoffTo: null,
+      handoffId: null,
+    });
+
+    await post(app, dataToken, batch(ev(3, "handoff_sent", { to: "wesley", handoffId: "h9" })));
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "waiting", handoffId: "h9" });
+    await post(
+      app,
+      dataToken,
+      batch(ev(4, "status_changed", { status: "offline", label: "Signed off" })),
+    );
+    // Links are released; an explicit label on the same event still applies.
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "offline",
+      label: "Signed off",
+      handoffTo: null,
+      handoffId: null,
+    });
+  });
+
+  it("frees the sender only when the handoff it waits on is accepted (side-handoff repro)", async () => {
+    const { app, repo, dataToken, wesleyToken } = setup();
+    // Sender works on t-primary, sends a side handoff (stays working), then hands off t-primary.
+    await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t-primary" })));
+    await post(app, dataToken, batch(ev(2, "handoff_sent", { to: "wesley", handoffId: "h-side" })));
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "working", taskId: "t-primary" });
+    await post(
+      app,
+      dataToken,
+      batch(ev(3, "handoff_sent", { to: "wesley", handoffId: "h-primary", taskId: "t-primary" })),
+    );
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "waiting",
+      handoffTo: "wesley",
+      handoffId: "h-primary",
+    });
+
+    // B accepts the side handoff: the sender keeps waiting, h-primary is still sent.
+    const side = await post(
+      app,
+      wesleyToken,
+      batch({ botId: "wesley", eventId: ulid(4), type: "handoff_accepted", handoffId: "h-side" }),
+    );
+    expect(side.status).toBe(200);
+    expect(repo.getHandoff("h-primary")?.state).toBe("sent");
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "waiting", handoffId: "h-primary" });
+
+    // B accepts h-primary: now the sender is free.
+    await post(
+      app,
+      wesleyToken,
+      batch({
+        botId: "wesley",
+        eventId: ulid(5),
+        type: "handoff_accepted",
+        handoffId: "h-primary",
+      }),
+    );
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "idle",
+      taskId: null,
+      label: null,
+      handoffTo: null,
+      handoffId: null,
+    });
+  });
+
+  it("records task_finished for another task without wiping the current work", async () => {
+    const { app, repo, dataToken } = setup();
+    await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t1", label: "Plan" })));
+    const res = await post(
+      app,
+      dataToken,
+      batch(ev(2, "task_finished", { taskId: "t-other", result: "done" })),
+    );
+    await expect(res.json()).resolves.toMatchObject({ accepted: 1 });
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "working",
+      taskId: "t1",
+      label: "Plan",
+    });
+    expect(repo.listEventsSince(0).map((event) => event.type)).toEqual([
+      "task_started",
+      "task_finished",
+    ]);
+
+    // The matching id, or no id at all, finishes the current task.
+    await post(app, dataToken, batch(ev(3, "task_finished", { taskId: "t1", result: "done" })));
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "idle", taskId: null, label: null });
+    await post(app, dataToken, batch(ev(4, "task_started", { taskId: "t2" })));
+    await post(app, dataToken, batch(ev(5, "task_finished", { result: "cancelled" })));
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "idle", taskId: null });
   });
 
   it("keeps the sender working while another task is still open", async () => {

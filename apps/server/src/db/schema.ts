@@ -67,6 +67,8 @@ export const botStatus = sqliteTable(
     label: text("label"),
     taskId: text("task_id"),
     handoffTo: text("handoff_to").references(() => bots.id),
+    // The handoff a `waiting` bot is waiting on; only its acceptance releases the bot.
+    handoffId: text("handoff_id").references(() => handoffs.id),
     since: text("since").notNull(),
     lastHeartbeatAt: text("last_heartbeat_at").notNull(),
     lastEventSeq: integer("last_event_seq"),

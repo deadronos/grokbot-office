@@ -136,7 +136,7 @@ describe("0001_constraints migration", () => {
         NOW,
       );
       const insertStatus = db.prepare(
-        "insert into bot_status values ('data',?,null,null,null,?,?,null)",
+        "insert into bot_status (bot_id, status, since, last_heartbeat_at) values ('data', ?, ?, ?)",
       );
       expect(() => insertStatus.run("napping", NOW, NOW)).toThrow(/CHECK/);
       insertStatus.run("idle", NOW, NOW);

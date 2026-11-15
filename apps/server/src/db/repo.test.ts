@@ -71,6 +71,7 @@ describe("SQLite repository", () => {
       label: null,
       taskId: null,
       handoffTo: null,
+      handoffId: null,
       since: now,
       lastHeartbeatAt: now,
       lastEventSeq: null,
@@ -205,12 +206,49 @@ describe("SQLite repository", () => {
     repo.touchHeartbeat("a", undefined, laterStill);
     expect(repo.getBotStatus("a")).toMatchObject({ status: "working", since: now });
 
+    // A heartbeat cannot end derived working; only `offline` gets through.
     repo.touchHeartbeat("a", "reviewing", laterStill);
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "working", since: now });
+
+    repo.touchHeartbeat("a", "offline", laterStill);
     expect(repo.getBotStatus("a")).toMatchObject({
-      status: "reviewing",
+      status: "offline",
       since: laterStill,
       lastHeartbeatAt: laterStill,
     });
+  });
+
+  it("releases task and handoff links when a heartbeat brings a bot to rest", () => {
+    const { repo } = setup();
+    repo.upsertBot(bot("a"));
+    repo.upsertBot(bot("b"));
+    const start = "2026-01-01T00:00:00.000Z";
+    repo.setBotStatus({
+      botId: "a",
+      status: "working",
+      label: "Plan",
+      taskId: "t1",
+      handoffTo: "b",
+      handoffId: null,
+      since: start,
+      lastHeartbeatAt: start,
+      lastEventSeq: null,
+    });
+    repo.touchHeartbeat("a", "idle", "2026-01-02T00:00:00.000Z");
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "working", taskId: "t1" });
+    repo.touchHeartbeat("a", "offline", "2026-01-02T00:00:00.000Z");
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "offline",
+      taskId: null,
+      label: null,
+      handoffTo: null,
+      handoffId: null,
+    });
+    // From a resting state a heartbeat may set any status.
+    repo.touchHeartbeat("a", "reviewing", "2026-01-03T00:00:00.000Z");
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "reviewing" });
+    repo.touchHeartbeat("a", "idle", "2026-01-04T00:00:00.000Z");
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "idle", taskId: null });
   });
   it("opens file databases in WAL mode and re-applies migrations idempotently", () => {
     const dir = mkdtempSync(join(tmpdir(), "grokbot-office-db-"));
