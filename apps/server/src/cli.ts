@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 
 import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
@@ -93,9 +93,21 @@ export function main(
   }
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (invokedDirectly) {
+/**
+ * Node resolves symlinks for the entry module's URL but not for argv[1], so compare
+ * real paths: otherwise `node /tmp/.../cli.js` on macOS (/tmp → /private/tmp) or a
+ * symlinked install silently does nothing.
+ */
+export function isEntryModule(argv1: string | undefined, moduleUrl: string): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryModule(process.argv[1], import.meta.url)) {
   // `pnpm admin ...` forwards arguments after its own `--`.
   const argv = process.argv.slice(2);
   if (argv[0] === "--") argv.shift();
