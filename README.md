@@ -72,8 +72,10 @@ After changing `apps/server/src/db/schema.ts`, run
 ## Tokens
 
 Access is per-bot and viewer bearer tokens. The admin token comes from the
-`ADMIN_TOKEN` env var only (never committed, never stored in the DB); while it is
-unset or still `change-me`, every `/api/admin/*` route answers 503.
+`ADMIN_TOKEN` env var only (never committed, never stored in the DB). It must be at
+least 32 characters after trimming; while it is unset, still `change-me`, or too
+short, every `/api/admin/*` route answers 503. Generate one with
+`openssl rand -base64 32`.
 
 - tokens are 32 random bytes (base64url), shown once, stored as a SHA-256 hash plus
   an 8-character prefix; `last_used_at` is updated on every authenticated request
@@ -89,6 +91,41 @@ pnpm admin token create --kind bot --bot data   # prints the token once
 pnpm admin token list                           # prefix/kind/last used, never plaintext
 pnpm admin token revoke <token id>
 ```
+
+## Bot API
+
+Bots authenticate with their own bot token and may only act for that bot id: a
+token bound elsewhere gets `403`, any missing/unknown/revoked token gets `401`.
+Auth errors are generic; the server logs the reason, never the token.
+
+Register (idempotent upsert of name, role, avatar and pod; the server keeps
+desk assignment and visibility for admins). The reply carries the heartbeat
+cadence the bot should use:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8787/api/bots/register \
+  -H "Authorization: Bearer $BOT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"data","name":"Data","role":"Code-Orchestrator","avatar":"android-gold","pod":"dev"}'
+# 200 {"id":"data","heartbeatIntervalSec":60,"timeoutSec":300}
+```
+
+Heartbeat (keep-alive; the optional `status` is one of `idle`, `working`,
+`waiting`, `reviewing`, `offline`; an empty body is fine). A bot with no heartbeat
+for `timeoutSec` counts as offline:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots/data/heartbeat \
+  -H "Authorization: Bearer $BOT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"working"}'
+# 204
+```
+
+`HEARTBEAT_INTERVAL_SEC` (default 60) and `HEARTBEAT_TIMEOUT_SEC` (default 300)
+set the cadence; the timeout must be larger than the interval, and invalid
+values stop the server at startup. Request bodies on `/api/*` are capped at
+16 KB (`413` beyond that).
 
 ## CI
 
