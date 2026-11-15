@@ -7,7 +7,7 @@ export type Health = {
   service: string;
 };
 
-export * from "./enums";
-export * from "./layout";
-export * from "./sanitize";
-export * from "./schemas";
+export * from "./enums.ts";
+export * from "./layout.ts";
+export * from "./sanitize.ts";
+export * from "./schemas.ts";

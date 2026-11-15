@@ -1,4 +1,4 @@
-import type { Pod } from "./enums";
+import type { Pod } from "./enums.ts";
 
 export type Desk = {
   botId: string;

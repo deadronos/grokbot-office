@@ -7,17 +7,19 @@
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env --watch src/index.ts",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/index.js --external:better-sqlite3",
+    "build": "rm -rf dist && esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node24 --outdir=dist --external:better-sqlite3 && cp -R drizzle dist/drizzle",
     "typecheck": "tsc",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "admin": "node --env-file-if-exists=../../.env src/cli.ts"
   },
   "dependencies": {
     "@grokbot-office/shared": "workspace:*",
     "@hono/node-server": "^2.1.8",
     "better-sqlite3": "^13.1.1",
     "drizzle-orm": "^0.45.4",
-    "hono": "^4.13.18"
+    "hono": "^4.13.18",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

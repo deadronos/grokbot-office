@@ -1,0 +1,30 @@
+import { createApp } from "./app.ts";
+import { openDatabase } from "./db/database.ts";
+import { createSqliteRepo } from "./db/repo.ts";
+
+/** Obviously fake admin token; real ones never live in the repo. */
+export const TEST_ADMIN_TOKEN = "test-admin-token-0000";
+
+export const NOW = "2026-01-01T00:00:00.000Z";
+
+export const botRecord = (id: string) => ({
+  id,
+  name: id,
+  role: "worker",
+  avatar: "robot",
+  pod: "dev" as const,
+  deskIndex: 0,
+  hidden: false,
+  createdAt: NOW,
+  updatedAt: NOW,
+});
+
+/** In-memory app + repo for route and middleware tests. */
+export function testSetup({ adminToken = TEST_ADMIN_TOKEN }: { adminToken?: string } = {}) {
+  const db = openDatabase(":memory:");
+  const repo = createSqliteRepo(db);
+  const app = createApp({ repo, adminToken });
+  return { db, repo, app, close: () => db.close() };
+}
+
+export const adminHeaders = (token = TEST_ADMIN_TOKEN) => ({ authorization: `Bearer ${token}` });

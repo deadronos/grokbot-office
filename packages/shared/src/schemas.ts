@@ -6,8 +6,8 @@ import {
   handoffStateSchema,
   podSchema,
   taskResultSchema,
-} from "./enums";
-import { LABEL_MAX, REF_MAX, sanitizeText } from "./sanitize";
+} from "./enums.ts";
+import { LABEL_MAX, REF_MAX, sanitizeText } from "./sanitize.ts";
 
 /** Lowercase slug, e.g. `data` or `wesley`. */
 export const BotId = z

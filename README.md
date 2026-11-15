@@ -52,14 +52,43 @@ works from the browser.
 | `pnpm format:check` | Verify formatting without writing |
 | `pnpm typecheck`    | `tsc` for every package           |
 | `pnpm test`         | Vitest for every package          |
+| `pnpm admin ...`    | Admin token CLI (see below)       |
 
 ## Database
 
 The server stores its state in SQLite (better-sqlite3, WAL mode) via Drizzle ORM.
 The file comes from `DATABASE_PATH` (default `./data/bot-office.db`, gitignored).
-Migrations live in `apps/server/drizzle/` and are applied on server start; after
-changing `apps/server/src/db/schema.ts`, run `pnpm --filter @grokbot-office/server db:generate`
-and commit the new migration.
+Relative paths resolve against `apps/server/`, not the current directory, so the
+default file is `apps/server/data/bot-office.db` no matter where you start the
+server. `NODE_ENV=production` requires an absolute path. The database handle is
+closed on `SIGTERM`/`SIGINT`, which checkpoints the WAL and removes the `-wal`/`-shm`
+files.
+
+Migrations live in `apps/server/drizzle/` and are applied on server start; the build
+copies them to `apps/server/dist/drizzle/` so the bundled server and CLI find them.
+After changing `apps/server/src/db/schema.ts`, run
+`pnpm --filter @grokbot-office/server db:generate` and commit the new migration.
+
+## Tokens
+
+Access is per-bot and viewer bearer tokens. The admin token comes from the
+`ADMIN_TOKEN` env var only (never committed, never stored in the DB); while it is
+unset or still `change-me`, every `/api/admin/*` route answers 503.
+
+- tokens are 32 random bytes (base64url), shown once, stored as a SHA-256 hash plus
+  an 8-character prefix; `last_used_at` is updated on every authenticated request
+- kinds: `bot` (bound to one bot slug) and `viewer`; admin stays env-only
+- routes: `POST`/`GET /api/admin/tokens`, `DELETE /api/admin/tokens/:id`,
+  `PATCH /api/admin/bots/:id`
+- authorization headers are never logged
+
+The admin CLI talks to the database directly, so it needs no `ADMIN_TOKEN` locally:
+
+```bash
+pnpm admin token create --kind bot --bot data   # prints the token once
+pnpm admin token list                           # prefix/kind/last used, never plaintext
+pnpm admin token revoke <token id>
+```
 
 ## CI
 
