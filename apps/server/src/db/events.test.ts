@@ -12,7 +12,6 @@ const bot = (id: string) => ({
   role: "worker",
   avatar: "robot",
   pod: "dev" as const,
-  deskIndex: 0,
   hidden: false,
   createdAt: now,
   updatedAt: now,
