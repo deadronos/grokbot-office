@@ -187,3 +187,105 @@ canvas {
   color: #e0776c;
   font-size: 0.85rem;
 }
+
+.hud {
+  position: fixed;
+  bottom: 1rem;
+  left: 1.25rem;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(24rem, calc(100vw - 2.5rem));
+  max-height: 55vh;
+  padding: 0.7rem 0.85rem;
+  overflow: hidden;
+  border: 1px solid rgb(244 246 251 / 15%);
+  border-radius: 0.5rem;
+  background: rgb(10 13 19 / 55%);
+  font-size: 0.78rem;
+  pointer-events: none;
+}
+
+.hud-section {
+  min-height: 0;
+}
+
+.hud-heading {
+  margin: 0 0 0.3rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.hud-bots,
+.hud-events {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.hud-events {
+  max-height: 30vh;
+}
+
+.hud-bot,
+.hud-event {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+
+.hud-name {
+  font-weight: 600;
+}
+
+.hud-label,
+.hud-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+.hud-since {
+  margin-left: auto;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-event .hud-since {
+  margin-left: 0;
+}
+
+.hud-empty {
+  opacity: 0.5;
+}
+
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #8b93a1;
+}
+
+.status-working {
+  background: #5ad19a;
+}
+
+.status-waiting {
+  background: #e0b95c;
+}
+
+.status-reviewing {
+  background: #e0a94f;
+}
+
+.status-offline {
+  background: #5a616e;
+}

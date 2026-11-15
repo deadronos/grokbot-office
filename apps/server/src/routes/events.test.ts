@@ -717,6 +717,39 @@ describe("GET /api/events", () => {
       expect(next.events.map((event) => event.seq)).toEqual([5]);
     });
 
+    it("passes only the hidden bot's bot_hidden frame to viewers", async () => {
+      const { app, repo, dataToken, viewerToken, ghostEvents } = hiddenSetup();
+      await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t-1" })));
+      ghostEvents(
+        ghost(2, "task_started", { taskId: "classified", label: "classified" }),
+        ghost(3, "handoff_sent", { to: "data", handoffId: "h-secret", label: "classified" }),
+      );
+      // What the admin PATCH writes when a bot is hidden mid-stream.
+      repo.insertEvent({
+        eventId: ulid(4),
+        botId: "ghost",
+        type: "bot_hidden",
+        receivedAt: NOW,
+      });
+
+      const res = await getEvents(app, viewerToken);
+      const text = await res.text();
+      const body = JSON.parse(text) as EventsPage;
+      expect(body.events.map((event) => [event.seq, event.botId, event.type])).toEqual([
+        [1, "data", "task_started"],
+        [4, "ghost", "bot_hidden"],
+      ]);
+      expect(body.events[1]).toEqual({
+        seq: 4,
+        eventId: ulid(4),
+        botId: "ghost",
+        type: "bot_hidden",
+        receivedAt: NOW,
+      });
+      // The frame carries no status, label or handoff from the hidden bot.
+      for (const secret of ["classified", "h-secret"]) expect(text).not.toContain(secret);
+    });
+
     it("shows the history again once the bot is un-hidden", async () => {
       const { app, repo, viewerToken, ghostEvents } = hiddenSetup();
       ghostEvents(ghost(1, "task_started", { taskId: "classified" }));

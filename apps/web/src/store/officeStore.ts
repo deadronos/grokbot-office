@@ -1,4 +1,11 @@
-import { StateSnapshot, StreamEvent, type BotSnapshot, type Handoff } from "@grokbot-office/shared";
+import {
+  StateSnapshot,
+  StreamEvent,
+  applyLabelRule,
+  type BotSnapshot,
+  type Handoff,
+  type LabelEvent,
+} from "@grokbot-office/shared";
 import { create } from "zustand";
 
 import { openMessageStream } from "../api/stream";
@@ -7,6 +14,13 @@ import { invalidateScene } from "../scene/invalidateScene";
 export const SESSION_PATH = "/api/session";
 export const SESSION_LOGOUT_PATH = "/api/session/logout";
 export const STATE_PATH = "/api/state";
+export const EVENTS_PATH = "/api/events";
+
+/** The HUD feed shows the newest events only; older ones fall off the back. */
+export const FEED_LIMIT = 20;
+/** A failed snapshot refetch is retried from 1s, doubling up to 30s. */
+const SNAPSHOT_RETRY_BASE_MS = 1_000;
+const SNAPSHOT_RETRY_MAX_MS = 30_000;
 
 /** How long the stream may stay broken before "reconnecting" becomes "office closed". */
 export const CLOSED_AFTER_MS = 45_000;
@@ -24,6 +38,10 @@ type OfficeData = {
   bots: Record<string, BotSnapshot>;
   openHandoffs: Handoff[];
   lastEventSeq: number;
+  /** Newest last, capped at `FEED_LIMIT`. */
+  events: StreamEvent[];
+  /** Set by a live handoff_sent, cleared by the scene after its flash. */
+  handoffFlash: { seq: number; from: string; to: string } | null;
 };
 
 export type OfficeStore = OfficeData & {
@@ -36,6 +54,8 @@ export type OfficeStore = OfficeData & {
   logout: () => Promise<void>;
   applySnapshot: (snapshot: StateSnapshot) => void;
   applyEvent: (event: StreamEvent) => void;
+  seedEvents: (events: StreamEvent[]) => void;
+  clearHandoffFlash: () => void;
   startStream: () => () => void;
   pageUnloading: boolean;
   setPageUnloading: (value: boolean) => void;
@@ -43,7 +63,13 @@ export type OfficeStore = OfficeData & {
   onPageShow: (persisted: boolean) => Promise<void>;
 };
 
-const EMPTY_DATA: OfficeData = { bots: {}, openHandoffs: [], lastEventSeq: 0 };
+const EMPTY_DATA: OfficeData = {
+  bots: {},
+  openHandoffs: [],
+  lastEventSeq: 0,
+  events: [],
+  handoffFlash: null,
+};
 
 let closedTimer: ReturnType<typeof setTimeout> | undefined;
 let stopStream: (() => void) | undefined;
@@ -72,45 +98,52 @@ function reduceEvent(data: OfficeData, event: StreamEvent): OfficeData {
   const at = event.at ?? event.receivedAt;
   let bots = data.bots;
   let openHandoffs = data.openHandoffs;
+  let handoffFlash = data.handoffFlash;
 
   const update = (patch: Partial<BotSnapshot>) => {
     bots = patchBot(bots, botId, { ...patch, lastEventSeq: event.seq });
   };
 
+  /** The shared table owns status/label/task, so web and server cannot drift. */
+  const rule = (input: LabelEvent) => {
+    if (!bot) return undefined;
+    const next = applyLabelRule(
+      { status: bot.status, label: bot.label ?? null, taskId: bot.taskId ?? null },
+      input,
+    );
+    return {
+      status: next.status,
+      label: next.label ?? undefined,
+      taskId: next.taskId ?? undefined,
+    };
+  };
+
   switch (event.type) {
     case "status_changed": {
-      if (!bot) break;
-      const status = event.status ?? bot.status;
-      const resting = status === "idle" || status === "offline";
-      // A missing label leaves the current one. The server omits null labels on
-      // the wire (`toStreamEvent`), so an explicit clear never arrives here.
-      update({
-        status,
-        label: event.label !== undefined ? event.label : bot.label,
-        since: at,
-        taskId: resting ? undefined : bot.taskId,
+      // A missing label keeps the current one on a busy status and clears it when
+      // resting; the server omits null labels on the wire, so a clear never arrives.
+      const next = rule({
+        type: "status_changed",
+        status: event.status ?? bot?.status ?? "idle",
+        label: event.label,
       });
+      if (next) update({ ...next, since: at });
       break;
     }
     case "task_started": {
-      if (!bot) break;
-      update({
-        status: "working",
-        label: event.label ?? bot.label,
-        taskId: event.taskId,
-        since: at,
-      });
+      const next = rule({ type: "task_started", label: event.label, taskId: event.taskId });
+      if (next) update({ ...next, since: at });
       break;
     }
     case "task_finished": {
-      if (!bot) break;
-      update({ status: "idle", label: undefined, taskId: undefined, since: at });
+      const next = rule({ type: "task_finished" });
+      if (next) update({ ...next, since: at });
       break;
     }
     case "handoff_sent": {
-      if (!bot) break;
-      update({ status: "waiting", label: event.label ?? bot.label, since: at });
-      if (event.handoffId && event.to) {
+      const next = rule({ type: "handoff_sent", label: event.label });
+      if (next) update({ ...next, since: at });
+      if (bot && event.handoffId && event.to) {
         const handoff: Handoff = {
           id: event.handoffId,
           fromBotId: botId,
@@ -120,20 +153,21 @@ function reduceEvent(data: OfficeData, event: StreamEvent): OfficeData {
           sentAt: at,
         };
         openHandoffs = [...openHandoffs.filter((entry) => entry.id !== handoff.id), handoff];
+        // The scene flashes a line from this desk to the receiver's and clears it.
+        handoffFlash = { seq: event.seq, from: botId, to: event.to };
       }
       break;
     }
     case "handoff_accepted": {
       const handoff = openHandoffs.find((entry) => entry.id === event.handoffId);
       openHandoffs = openHandoffs.filter((entry) => entry.id !== event.handoffId);
-      if (bot) {
-        update({
-          status: "working",
-          label: event.label ?? bot.label,
-          taskId: event.taskId ?? bot.taskId,
-          since: at,
-        });
-      }
+      const next = rule({
+        type: "handoff_accepted",
+        label: event.label,
+        taskId: event.taskId,
+        handoffLabel: handoff?.label ?? null,
+      });
+      if (next) update({ ...next, since: at });
       // The sender only rests if it was still waiting on this handoff.
       if (handoff && handoff.fromBotId !== botId) {
         const sender = bots[handoff.fromBotId];
@@ -149,7 +183,8 @@ function reduceEvent(data: OfficeData, event: StreamEvent): OfficeData {
       break;
     }
     case "offline": {
-      update({ status: "offline", label: undefined, taskId: undefined, since: at });
+      const next = rule({ type: "offline" });
+      if (next) update({ ...next, since: at });
       break;
     }
     case "bot_registered": {
@@ -157,9 +192,23 @@ function reduceEvent(data: OfficeData, event: StreamEvent): OfficeData {
       if (bot) update({});
       break;
     }
+    case "bot_hidden": {
+      // Display-only event: drop the bot and any handoff that names it.
+      bots = Object.fromEntries(Object.entries(bots).filter(([id]) => id !== botId));
+      openHandoffs = openHandoffs.filter(
+        (handoff) => handoff.fromBotId !== botId && handoff.toBotId !== botId,
+      );
+      break;
+    }
   }
 
-  return { bots, openHandoffs, lastEventSeq: event.seq };
+  return {
+    bots,
+    openHandoffs,
+    lastEventSeq: event.seq,
+    events: [...data.events, event].slice(-FEED_LIMIT),
+    handoffFlash,
+  };
 }
 
 async function postSession(path: string): Promise<Response> {
@@ -168,6 +217,21 @@ async function postSession(path: string): Promise<Response> {
 
 let refreshInFlight = false;
 let pendingSnapshotEvents: StreamEvent[] = [];
+
+/** Bumped whenever the session ends, so a late snapshot cannot land in the next one. */
+let snapshotGeneration = 0;
+let snapshotRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let snapshotRetries = 0;
+
+/** Cancel an in-flight or queued snapshot refresh; the caller's data is already gone. */
+function resetSnapshotRefresh(): void {
+  snapshotGeneration += 1;
+  if (snapshotRetryTimer !== undefined) clearTimeout(snapshotRetryTimer);
+  snapshotRetryTimer = undefined;
+  pendingSnapshotEvents = [];
+  refreshInFlight = false;
+  snapshotRetries = 0;
+}
 
 async function fetchSnapshot(): Promise<StateSnapshot | "unauthorized" | "failed"> {
   try {
@@ -185,19 +249,60 @@ async function fetchSnapshot(): Promise<StateSnapshot | "unauthorized" | "failed
 async function refreshOfficeSnapshot(getState: () => OfficeStore): Promise<void> {
   if (refreshInFlight) return;
   refreshInFlight = true;
-  try {
-    const result = await fetchSnapshot();
-    if (result !== "unauthorized" && result !== "failed") {
-      getState().applySnapshot(result);
-    }
-  } finally {
-    const queued = pendingSnapshotEvents;
+  const startedAt = snapshotGeneration;
+  const result = await fetchSnapshot();
+  // Logout or expiry while the fetch was out: the queue is gone and this data is stale.
+  if (snapshotGeneration !== startedAt) return;
+
+  if (result === "failed") {
+    // Events wait in the queue; the retry doubles from 1s up to 30s.
+    const delay = Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** snapshotRetries);
+    snapshotRetries += 1;
+    snapshotRetryTimer = setTimeout(() => {
+      snapshotRetryTimer = undefined;
+      refreshInFlight = false;
+      if (snapshotGeneration !== startedAt) return;
+      void refreshOfficeSnapshot(getState);
+    }, delay);
+    return;
+  }
+
+  snapshotRetries = 0;
+  if (result === "unauthorized") {
     pendingSnapshotEvents = [];
     refreshInFlight = false;
-    for (const event of queued) getState().applyEvent(event);
+    return;
   }
+
+  getState().applySnapshot(result);
+  const queued = pendingSnapshotEvents;
+  pendingSnapshotEvents = [];
+  refreshInFlight = false;
+  for (const event of queued) getState().applyEvent(event);
 }
 
+/** Seeds the HUD feed from the viewer API; a missing feed never blocks the office. */
+async function seedEventFeed(getState: () => OfficeStore): Promise<void> {
+  const startedAt = snapshotGeneration;
+  // Only the newest window matters; `lastEventSeq` already counts hidden events.
+  const since = Math.max(0, getState().lastEventSeq - FEED_LIMIT);
+  try {
+    const response = await fetch(`${EVENTS_PATH}?since=${since}&limit=${FEED_LIMIT}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok || snapshotGeneration !== startedAt) return;
+    const body = (await response.json()) as { events?: unknown };
+    if (!Array.isArray(body.events)) return;
+    getState().seedEvents(
+      body.events.flatMap((raw) => {
+        const parsed = StreamEvent.safeParse(raw);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    );
+  } catch {
+    // A missing feed is only a missing panel; it does not block the office.
+  }
+}
 export const useOfficeStore = create<OfficeStore>()((set, get) => ({
   ...EMPTY_DATA,
   phase: "checking",
@@ -214,6 +319,20 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
     invalidateScene();
   },
 
+  seedEvents: (events) => {
+    set((state) => {
+      // Merge by seq so a reseed never duplicates or rewinds live frames.
+      const merged = new Map(state.events.map((event) => [event.seq, event]));
+      for (const event of events) merged.set(event.seq, event);
+      return {
+        events: [...merged.values()].toSorted((a, b) => a.seq - b.seq).slice(-FEED_LIMIT),
+      };
+    });
+    invalidateScene();
+  },
+
+  clearHandoffFlash: () => set({ handoffFlash: null }),
+
   applyEvent: (event) => {
     const state = get();
     // Frames can repeat after a reconnect; the sequence makes replay idempotent.
@@ -226,6 +345,8 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
       return;
     }
     if (event.type === "bot_registered" && !state.bots[event.botId]) {
+      // Keep the registration on the queue so the feed (and lastEventSeq) stay in sync.
+      pendingSnapshotEvents.push(event);
       void refreshOfficeSnapshot(get);
       return;
     }
@@ -237,21 +358,26 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
     try {
       const response = await fetch(STATE_PATH, { credentials: "same-origin" });
       if (response.status === 401) {
+        resetSnapshotRefresh();
         set({ phase: "login", connection: "reconnecting", pending: false, error: null });
         return;
       }
       if (!response.ok) {
+        resetSnapshotRefresh();
         set({ phase: "login", connection: "closed", pending: false, error: UNREACHABLE_MESSAGE });
         return;
       }
       const parsed = StateSnapshot.safeParse(await response.json());
       if (!parsed.success) {
+        resetSnapshotRefresh();
         set({ phase: "login", connection: "closed", pending: false, error: BAD_RESPONSE_MESSAGE });
         return;
       }
       get().applySnapshot(parsed.data);
       set({ phase: "ready", connection: "reconnecting", pending: false, error: null });
+      void seedEventFeed(get);
     } catch {
+      resetSnapshotRefresh();
       set({ phase: "login", connection: "closed", pending: false, error: UNREACHABLE_MESSAGE });
     }
   },
@@ -301,6 +427,7 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
   },
 
   logout: async () => {
+    resetSnapshotRefresh();
     stopStream?.();
     stopStream = undefined;
     clearClosedTimer();
@@ -320,6 +447,7 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
 
     /** A 401 probe means the cookie is gone: stop retrying and ask for a token. */
     function expire() {
+      resetSnapshotRefresh();
       close?.();
       close = undefined;
       stopStream = undefined;

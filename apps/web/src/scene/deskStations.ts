@@ -27,6 +27,9 @@ function place(desk: Desk, localX: number, localY: number, localZ: number): Plac
   };
 }
 
+/** Plate size in world units; kept small so it cannot cover the desk in front. */
+export const NAME_PLATE_SIZE: readonly [number, number] = [1.2, 0.28];
+
 /** One station per fixed desk: the desk faces the centre, the bot sits behind it. */
 export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   desk,
@@ -36,5 +39,6 @@ export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   chairSeat: place(desk, 0, 0.48, -0.75),
   chairBack: place(desk, 0, 0.7, -1),
   bot: place(desk, 0, 0.75, -0.75),
-  namePlate: place(desk, 0, 2.1, -0.75),
+  // High above the chair, clear of the desk in front (see deskStations.test.ts).
+  namePlate: place(desk, 0, 3.05, -0.75),
 }));

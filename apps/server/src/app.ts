@@ -196,7 +196,7 @@ export function createApp({
 
   // No request logger on purpose: Authorization headers must never reach the logs.
   app.use("/api/admin/*", requireAdmin({ adminToken }));
-  app.route("/api/admin", adminRoutes(repo));
+  app.route("/api/admin", adminRoutes(repo, hub));
   app.route("/api/bots", botRoutes(repo, heartbeat, hub));
   app.route("/api/events", eventRoutes({ repo, adminToken, hub, policy: session }));
   app.route("/api/state", stateRoutes({ repo, adminToken, policy: session }));

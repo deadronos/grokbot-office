@@ -3,14 +3,17 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
+import { useOfficeStore } from "../store/officeStore";
 import { BOT_COLORS } from "./botColors";
-import { DESK_STATIONS, type Placement } from "./deskStations";
+import { REVIEW_MONITOR, deskVisual, pulseFactor } from "./deskVisuals";
+import { DESK_STATIONS, NAME_PLATE_SIZE, type DeskStation, type Placement } from "./deskStations";
 import { setSceneInvalidator } from "./invalidateScene";
 import { CAMERA, CANVAS_DPR, FRAMELOOP, ORBIT_LIMITS, SHADOWS } from "./sceneConfig";
 
 const ROOM = { width: 12.5, depth: 10.5, wallHeight: 3.2, wall: 0.2 };
 const BACKGROUND = "#141821";
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const HANDOFF_FLASH_MS = 1_200;
 
 // Static furniture placements, so their instance matrices are built exactly once.
 const DESK_BODIES = DESK_STATIONS.map((station) => station.deskBody);
@@ -124,8 +127,191 @@ function NamePlate({ text, placement }: { text: string; placement: Placement }) 
   });
   return (
     <mesh ref={meshRef} position={placement.position}>
-      <planeGeometry args={[1.5, 0.38]} />
+      <planeGeometry args={[NAME_PLATE_SIZE[0], NAME_PLATE_SIZE[1]]} />
       <meshBasicMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
+    </mesh>
+  );
+}
+
+/** The screen itself: grey when idle, the bot colour while working, amber for review. */
+function Monitor({
+  station,
+  base,
+  intensity,
+  pulsing,
+}: {
+  station: DeskStation;
+  base: string;
+  intensity: number;
+  pulsing: boolean;
+}) {
+  const materialRef = useRef<THREE.MeshBasicMaterial>(null);
+  const invalidate = useThree((state) => state.invalidate);
+  const baseColor = useMemo(() => new THREE.Color(base), [base]);
+  const [x, y, z] = station.screen.position;
+  const [nx, nz] = [Math.sin(station.desk.facing), Math.cos(station.desk.facing)];
+  const normalOffset = 0.04;
+
+  useEffect(() => {
+    materialRef.current?.color.copy(baseColor).multiplyScalar(intensity);
+    invalidate();
+  }, [baseColor, intensity, invalidate]);
+
+  useFrame(({ clock }) => {
+    if (!pulsing || !materialRef.current) return;
+    // One animated draw call, and the loop stops as soon as no bot is working.
+    materialRef.current.color
+      .copy(baseColor)
+      .multiplyScalar(0.55 + 0.45 * pulseFactor(clock.elapsedTime));
+    invalidate();
+  });
+
+  return (
+    <mesh
+      position={[x + nx * normalOffset, y, z + nz * normalOffset]}
+      rotation={[0, station.desk.facing, 0]}
+    >
+      <planeGeometry args={[0.6, 0.32]} />
+      <meshBasicMaterial ref={materialRef} toneMapped={false} />
+    </mesh>
+  );
+}
+
+/** Three shrinking spheres: a thought bubble, no font or sprite needed. */
+function ThoughtBubble({ position }: { position: [number, number, number] }) {
+  return (
+    <group position={position}>
+      <mesh>
+        <sphereGeometry args={[0.16, 12, 8]} />
+        <meshBasicMaterial color="#e9edf5" />
+      </mesh>
+      <mesh position={[0.1, -0.24, 0]}>
+        <sphereGeometry args={[0.07, 10, 6]} />
+        <meshBasicMaterial color="#e9edf5" />
+      </mesh>
+      <mesh position={[0.16, -0.36, 0]}>
+        <sphereGeometry args={[0.04, 8, 6]} />
+        <meshBasicMaterial color="#e9edf5" />
+      </mesh>
+    </group>
+  );
+}
+
+/** A ring plus a handle, floating over a reviewer's head. */
+function Magnifier({
+  position,
+  rotationY,
+}: {
+  position: [number, number, number];
+  rotationY: number;
+}) {
+  return (
+    <group position={position} rotation={[0, rotationY, 0]}>
+      <mesh>
+        <torusGeometry args={[0.15, 0.035, 8, 16]} />
+        <meshBasicMaterial color={REVIEW_MONITOR} />
+      </mesh>
+      <mesh position={[0.13, -0.16, 0]} rotation={[0, 0, Math.PI / 4]}>
+        <cylinderGeometry args={[0.03, 0.03, 0.22, 8]} />
+        <meshBasicMaterial color={REVIEW_MONITOR} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Hides the lit furniture for an offline bot: dark overlay, plus the empty chair. */
+function DimmedDesk({ station }: { station: DeskStation }) {
+  return (
+    <>
+      <mesh position={station.deskBody.position} rotation={[0, station.deskBody.rotationY, 0]}>
+        <boxGeometry args={[1.7, 0.74, 0.86]} />
+        <meshBasicMaterial color="#0b0e14" transparent opacity={0.55} depthWrite={false} />
+      </mesh>
+      <mesh position={station.chairSeat.position} rotation={[0, station.chairSeat.rotationY, 0]}>
+        <boxGeometry args={[0.52, 0.1, 0.52]} />
+        <meshBasicMaterial color="#0b0e14" transparent opacity={0.55} depthWrite={false} />
+      </mesh>
+    </>
+  );
+}
+
+/** One desk's live visuals: screen, occupant, status icon and dimming. */
+function DeskStatus({ station }: { station: DeskStation }) {
+  const bot = useOfficeStore((state) => state.bots[station.desk.botId]);
+  const botColor = BOT_COLORS[station.desk.botId] ?? "#8b93a1";
+  const visual = deskVisual(bot?.status, botColor);
+  const [x, y, z] = station.bot.position;
+
+  return (
+    <group>
+      <Monitor
+        station={station}
+        base={visual.monitor}
+        intensity={visual.monitorIntensity}
+        pulsing={visual.pulsing}
+      />
+      {visual.occupant ? (
+        <mesh position={station.bot.position} rotation={[0, station.bot.rotationY, 0]}>
+          <capsuleGeometry args={[0.22, 0.5, 4, 8]} />
+          <meshLambertMaterial color={botColor} flatShading />
+        </mesh>
+      ) : null}
+      <NamePlate text={station.desk.name} placement={station.namePlate} />
+      {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.05, z]} /> : null}
+      {visual.magnifier ? (
+        <Magnifier position={[x, y + 1.0, z]} rotationY={station.desk.facing} />
+      ) : null}
+      {visual.dim < 1 ? <DimmedDesk station={station} /> : null}
+    </group>
+  );
+}
+
+function DeskVitals() {
+  return (
+    <>
+      {DESK_STATIONS.map((station) => (
+        <DeskStatus key={station.desk.botId} station={station} />
+      ))}
+    </>
+  );
+}
+
+/** A short line from the sender's desk to the receiver's when a handoff is sent. */
+function HandoffFlash() {
+  const flash = useOfficeStore((state) => state.handoffFlash);
+  const clear = useOfficeStore((state) => state.clearHandoffFlash);
+
+  useEffect(() => {
+    if (!flash) return;
+    const timer = setTimeout(clear, HANDOFF_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [flash, clear]);
+
+  const geometry = useMemo(() => {
+    if (!flash) return undefined;
+    const from = DESK_STATIONS.find((station) => station.desk.botId === flash.from);
+    const to = DESK_STATIONS.find((station) => station.desk.botId === flash.to);
+    if (!from || !to) return undefined;
+    const start = new THREE.Vector3(...from.bot.position).add(new THREE.Vector3(0, 0.5, 0));
+    const end = new THREE.Vector3(...to.bot.position).add(new THREE.Vector3(0, 0.5, 0));
+    const direction = end.clone().sub(start);
+    return {
+      midpoint: start.clone().add(end).multiplyScalar(0.5),
+      length: direction.length(),
+      quaternion: new THREE.Quaternion().setFromUnitVectors(Y_AXIS, direction.normalize()),
+    };
+  }, [flash]);
+
+  if (!flash || !geometry) return null;
+  return (
+    <mesh position={geometry.midpoint} quaternion={geometry.quaternion}>
+      <cylinderGeometry args={[0.03, 0.03, geometry.length, 6]} />
+      <meshBasicMaterial
+        color={BOT_COLORS[flash.from] ?? "#f4f6fb"}
+        toneMapped={false}
+        transparent
+        opacity={0.9}
+      />
     </mesh>
   );
 }
@@ -143,22 +329,6 @@ function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
     return () => canvas.removeEventListener("webglcontextlost", onLost);
   }, [gl, onContextLost]);
   return null;
-}
-
-function DeskOccupants() {
-  return (
-    <group>
-      {DESK_STATIONS.map((station) => (
-        <group key={station.desk.botId}>
-          <mesh position={station.bot.position} rotation={[0, station.bot.rotationY, 0]}>
-            <capsuleGeometry args={[0.22, 0.5, 4, 8]} />
-            <meshLambertMaterial color={BOT_COLORS[station.desk.botId]} flatShading />
-          </mesh>
-          <NamePlate text={station.desk.name} placement={station.namePlate} />
-        </group>
-      ))}
-    </group>
-  );
 }
 
 /** Static office scene: the only Canvas in the app, loaded as its own async chunk. */
@@ -182,7 +352,8 @@ export default function OfficeScene({ onContextLost }: { onContextLost?: () => v
       <WebGlContextGuard onContextLost={onContextLost} />
       <Room />
       <Furniture />
-      <DeskOccupants />
+      <DeskVitals />
+      <HandoffFlash />
       <OrbitControls
         enableDamping={false}
         enablePan={false}

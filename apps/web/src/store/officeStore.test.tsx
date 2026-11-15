@@ -98,6 +98,8 @@ function resetStore(): void {
     bots: {},
     openHandoffs: [],
     lastEventSeq: 0,
+    events: [],
+    handoffFlash: null,
     phase: "checking",
     connection: "reconnecting",
     pending: false,
@@ -544,5 +546,174 @@ describe("applyEvent", () => {
       lastEventSeq: 9,
     });
     expect(useOfficeStore.getState().lastEventSeq).toBe(9);
+  });
+
+  it("clears the label and task when a status_changed rests the bot", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    useOfficeStore
+      .getState()
+      .applyEvent(streamEvent(8, { type: "status_changed", status: "idle" }));
+
+    expect(useOfficeStore.getState().bots.data).toMatchObject({
+      status: "idle",
+      label: undefined,
+      taskId: undefined,
+    });
+  });
+
+  it("labels an accepted handoff with the handoff label when the event has none", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+
+    source.emit(
+      "event",
+      JSON.stringify(
+        streamEvent(8, {
+          type: "handoff_sent",
+          to: "wesley",
+          handoffId: "handoff-1",
+          label: "issue-11",
+        }),
+      ),
+    );
+    source.emit(
+      "event",
+      JSON.stringify(
+        streamEvent(9, {
+          botId: "wesley",
+          type: "handoff_accepted",
+          handoffId: "handoff-1",
+          taskId: "issue-11",
+        }),
+      ),
+    );
+
+    expect(useOfficeStore.getState().bots.wesley).toMatchObject({
+      status: "working",
+      label: "issue-11",
+      taskId: "issue-11",
+    });
+  });
+
+  it("drops a hidden bot, its handoffs and shows it in the feed", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+
+    source.emit("event", JSON.stringify(streamEvent(8, { type: "offline" })));
+    useOfficeStore.getState().applyEvent({
+      seq: 9,
+      botId: "data",
+      type: "bot_hidden",
+      receivedAt: AT,
+    });
+
+    const state = useOfficeStore.getState();
+    expect(state.bots.data).toBeUndefined();
+    expect(state.openHandoffs).toEqual([]);
+    expect(state.events.at(-1)).toMatchObject({ seq: 9, type: "bot_hidden" });
+    expect(state.lastEventSeq).toBe(9);
+  });
+
+  it("flashes a handoff line and clears it on request", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+
+    source.emit(
+      "event",
+      JSON.stringify(
+        streamEvent(8, { type: "handoff_sent", to: "wesley", handoffId: "handoff-1" }),
+      ),
+    );
+    expect(useOfficeStore.getState().handoffFlash).toEqual({ seq: 8, from: "data", to: "wesley" });
+
+    useOfficeStore.getState().clearHandoffFlash();
+    expect(useOfficeStore.getState().handoffFlash).toBeNull();
+  });
+
+  it("seeds the feed from the events API and keeps it ordered", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        events: [
+          streamEvent(6, { type: "task_started", taskId: "issue-11" }),
+          { ...streamEvent(5), type: "bogus" },
+        ],
+      }),
+    );
+
+    await useOfficeStore.getState().checkSession();
+
+    await vi.waitFor(() => expect(useOfficeStore.getState().events).toHaveLength(1));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/events?since=0&limit=20", {
+      credentials: "same-origin",
+    });
+    expect(useOfficeStore.getState().events[0]).toMatchObject({ seq: 6, type: "task_started" });
+  });
+
+  it("retries a failed snapshot refetch with backoff and replays queued events", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(emptyResponse(500));
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "lumi" }));
+    // The frame that started the refresh is superseded by the snapshot; later
+    // frames wait in the queue and replay once a snapshot lands.
+    useOfficeStore
+      .getState()
+      .applyEvent(streamEvent(9, { type: "status_changed", status: "reviewing" }));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    // The retry waits one second before trying again.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ...snapshot,
+        bots: [
+          ...snapshot.bots,
+          {
+            id: "lumi",
+            name: "Lumi",
+            role: "Designer",
+            avatar: "glow",
+            pod: "ops",
+            status: "idle",
+            since: AT,
+            lastHeartbeatAt: AT,
+            lastEventSeq: 7,
+          },
+        ],
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(useOfficeStore.getState().bots.lumi?.name).toBe("Lumi");
+    expect(useOfficeStore.getState().bots.data?.status).toBe("reviewing");
+    expect(useOfficeStore.getState().lastEventSeq).toBe(9);
+  });
+
+  it("drops a queued snapshot retry on logout", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(emptyResponse(500));
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "lumi" }));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    fetchMock.mockResolvedValueOnce(emptyResponse(204));
+    await useOfficeStore.getState().logout();
+    fetchMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useOfficeStore.getState().bots).toEqual({});
   });
 });

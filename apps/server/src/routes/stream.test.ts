@@ -142,6 +142,52 @@ describe("GET /api/stream frames", () => {
   });
 });
 
+describe("GET /api/stream hidden bot", () => {
+  it("streams only the bot_hidden frame, with no other field from the hidden bot", async () => {
+    const { app, repo, hub, viewerToken } = setup();
+    repo.upsertBot({ ...botRecord("ghost"), hidden: true });
+    repo.applyEvents(
+      "ghost",
+      [
+        {
+          botId: "ghost",
+          eventId: ulid(1),
+          type: "task_started",
+          taskId: "classified",
+          label: "classified",
+        },
+        {
+          botId: "ghost",
+          eventId: ulid(2),
+          type: "handoff_sent",
+          to: "data",
+          handoffId: "h-secret",
+          label: "classified",
+        },
+      ] as never,
+      NOW,
+    );
+    const sse = new Sse(await open(app, auth(viewerToken)));
+
+    repo.insertEvent({
+      eventId: ulid(3),
+      botId: "ghost",
+      type: "bot_hidden",
+      receivedAt: NOW,
+    });
+    hub.notify();
+
+    const frame = await sse.next();
+    expect(JSON.parse(frame.data)).toMatchObject({
+      seq: 3,
+      botId: "ghost",
+      type: "bot_hidden",
+    });
+    for (const secret of ["classified", "h-secret"]) expect(frame.data).not.toContain(secret);
+    await sse.cancel();
+  });
+});
+
 describe("GET /api/stream opening", () => {
   it("writes a retry + comment frame first, so EventSource opens at once", async () => {
     const { app, viewerToken } = setup();

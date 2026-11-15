@@ -181,10 +181,14 @@ describe("POST /api/bots/:id/heartbeat", () => {
     expect((await heartbeat(app, "data", dataToken, {})).status).toBe(204);
     expect(repo.getBotStatus("data")?.status).toBe("idle");
 
+    // A heartbeat never enters the event-derived working/waiting states.
     expect((await heartbeat(app, "data", dataToken, { status: "working" })).status).toBe(204);
-    const working = repo.getBotStatus("data");
-    expect(working?.status).toBe("working");
-    expect(working?.since).toBe(working?.lastHeartbeatAt);
+    expect(repo.getBotStatus("data")?.status).toBe("idle");
+
+    expect((await heartbeat(app, "data", dataToken, { status: "reviewing" })).status).toBe(204);
+    const reviewing = repo.getBotStatus("data");
+    expect(reviewing?.status).toBe("reviewing");
+    expect(reviewing?.since).toBe(reviewing?.lastHeartbeatAt);
   });
 
   it("refreshes last_heartbeat_at and resets since only when the status changes", async () => {
