@@ -171,6 +171,100 @@ batch with `422 {"error":"invalid event","index":1}`.
 Times are the server's: `received_at` is one timestamp per batch. The client `at`
 is display-only and is clamped to ±10 minutes around it.
 
+## Viewer API
+
+The viewer is private: there is no public read mode. Both read routes accept a viewer
+bearer token (`pnpm admin token create --kind viewer`) or the env `ADMIN_TOKEN` as a
+bearer token; anything else gets `401`, and a bot token gets `403`. Responses are
+`Cache-Control: no-store`. #10 adds the HttpOnly session cookie the browser needs for
+SSE, so this API is header-only for now.
+
+`GET /api/state` is the initial snapshot: visible bots (`hidden = false`) ordered by
+desk index then id, their current status, the open (`sent`) handoffs, and the highest
+event sequence:
+
+```bash
+curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN"
+```
+
+```json
+{
+  "bots": [
+    {
+      "id": "data",
+      "name": "Data",
+      "role": "Code-Orchestrator",
+      "avatar": "android-gold",
+      "pod": "dev",
+      "desk": {
+        "botId": "data",
+        "name": "Data",
+        "pod": "dev",
+        "index": 0,
+        "x": -4.5,
+        "z": 3,
+        "facing": 3.14159
+      },
+      "status": "working",
+      "label": "issue-7",
+      "taskId": "issue-7",
+      "since": "2026-01-01T00:00:00.000Z",
+      "lastHeartbeatAt": "2026-01-01T00:00:00.000Z",
+      "lastEventSeq": 42
+    }
+  ],
+  "openHandoffs": [
+    {
+      "id": "h1",
+      "fromBotId": "data",
+      "toBotId": "wesley",
+      "label": "review",
+      "state": "sent",
+      "sentAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "lastEventSeq": 42
+}
+```
+
+Only bots in the shared desk layout carry `desk`; a bot without a status row is
+`offline` since its registration time with `lastEventSeq: 0`. Optional fields are
+omitted rather than sent as `null`.
+
+`GET /api/events?since={seq}&limit={n}` replays the log: events with `seq > since`
+ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
+500). Unknown, repeated or malformed parameters get `400 {"error":"invalid query"}`.
+Each event is a `StreamEvent`: `to` is a handoff's target bot, `at` the clamped client
+time and `receivedAt` the server time.
+
+```bash
+curl -sS 'http://127.0.0.1:8787/api/events?since=42&limit=100' \
+  -H "Authorization: Bearer $VIEWER_TOKEN"
+```
+
+```json
+{
+  "events": [
+    {
+      "seq": 43,
+      "eventId": "01JBQ0M0S5R8D6P4W2G7X9K3ZY",
+      "botId": "data",
+      "type": "task_started",
+      "taskId": "issue-7",
+      "receivedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "nextSince": 43,
+  "hasMore": false,
+  "lastSeq": 43
+}
+```
+
+`nextSince` is the `since` for the next call (the last returned seq, or the request's
+`since` when the page is empty); `hasMore` says whether more events exist after it;
+`lastSeq` is the highest sequence in the database. A `since` past the end returns an
+empty page.
+
 ## CI
 
 `.github/workflows/ci.yml` runs lint, format check, typecheck, test and build on
