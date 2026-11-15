@@ -39,6 +39,7 @@ describe("GET /api/state", () => {
     // Not in the desk layout: it shows in the HUD list only.
     repo.upsertBot({ ...botRecord("helper"), deskIndex: 0 });
     repo.upsertBot({ ...botRecord("hidden"), hidden: true });
+    repo.upsertBot({ ...botRecord("aardvark"), deskIndex: null });
 
     const res = await get(app, viewerToken);
     expect(res.status).toBe(200);
@@ -46,8 +47,14 @@ describe("GET /api/state", () => {
 
     const body = StateSnapshot.parse(await res.json());
 
-    // desk index first, then id; the hidden bot is gone.
-    expect(body.bots.map((bot) => bot.id)).toEqual(["helper", "wesley", "alpha", "data"]);
+    // desk index first, then id, no desk index last; the hidden bot is gone.
+    expect(body.bots.map((bot) => bot.id)).toEqual([
+      "helper",
+      "wesley",
+      "alpha",
+      "data",
+      "aardvark",
+    ]);
     expect(body.bots[0]).not.toHaveProperty("desk");
     expect(body.bots[3]?.desk).toEqual(getDesk("data"));
 
@@ -181,5 +188,11 @@ describe("GET /api/state auth", () => {
     expect(serialized).not.toContain("unknown-token-value");
     expect(serialized).toContain("auth: token rejected");
     expect(serialized).toContain(bot.id);
+  });
+  it("refuses query parameters", async () => {
+    const { app, viewerToken } = setup();
+    const res = await app.request("/api/state?since=1", { headers: auth(viewerToken) });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "invalid query" });
   });
 });

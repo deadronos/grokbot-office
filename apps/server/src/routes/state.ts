@@ -12,6 +12,8 @@ export function stateRoutes({ repo, adminToken }: { repo: Repo; adminToken: stri
   const api = new Hono<AppEnv>();
 
   api.get("/", requireViewer({ repo, adminToken }), (c) => {
+    // The snapshot takes no parameters; anything in the query is a client bug.
+    if (new URL(c.req.url).search !== "") return c.json({ error: "invalid query" }, 400);
     const snapshot = repo.getSnapshot();
     const statuses = new Map(snapshot.statuses.map((status) => [status.botId, status]));
     const body: StateSnapshot = {

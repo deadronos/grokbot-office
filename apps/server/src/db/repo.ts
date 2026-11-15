@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
@@ -211,7 +211,8 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .select()
           .from(bots)
           .where(eq(bots.hidden, false))
-          .orderBy(bots.deskIndex, bots.id)
+          // SQLite sorts NULL first; bots without a desk index go last instead.
+          .orderBy(sql`${bots.deskIndex} is null`, asc(bots.deskIndex), asc(bots.id))
           .all(),
         statuses: tx.select().from(botStatus).all(),
         openHandoffs: tx
