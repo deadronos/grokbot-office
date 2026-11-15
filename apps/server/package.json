@@ -7,10 +7,11 @@
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env --watch src/index.ts",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/index.js --external:better-sqlite3 && cp -R drizzle dist/drizzle",
+    "build": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node24 --outdir=dist --external:better-sqlite3 && cp -R drizzle dist/drizzle",
     "typecheck": "tsc",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "admin": "node --env-file-if-exists=../../.env src/cli.ts"
   },
   "dependencies": {
     "@grokbot-office/shared": "workspace:*",
