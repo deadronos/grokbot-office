@@ -1,6 +1,9 @@
 import { serve } from "@hono/node-server";
 
 import { app } from "./app.ts";
+import { openDatabase } from "./db/database.ts";
+
+openDatabase();
 
 const port = Number(process.env.PORT ?? 8787);
 

@@ -53,6 +53,14 @@ works from the browser.
 | `pnpm typecheck`    | `tsc` for every package           |
 | `pnpm test`         | Vitest for every package          |
 
+## Database
+
+The server stores its state in SQLite (better-sqlite3, WAL mode) via Drizzle ORM.
+The file comes from `DATABASE_PATH` (default `./data/bot-office.db`, gitignored).
+Migrations live in `apps/server/drizzle/` and are applied on server start; after
+changing `apps/server/src/db/schema.ts`, run `pnpm --filter @grokbot-office/server db:generate`
+and commit the new migration.
+
 ## CI
 
 `.github/workflows/ci.yml` runs lint, format check, typecheck, test and build on
