@@ -18,7 +18,15 @@ export function botRoutes(repo: Repo, heartbeat: HeartbeatConfig) {
     const parsed = RegisterBody.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     const bot = parsed.data;
-    if (c.get("token").botId !== bot.id) return c.json({ error: "forbidden" }, 403);
+    const token = c.get("token");
+    if (token.botId !== bot.id) {
+      // Same generic body as requireToken; the reason stays server-side.
+      console.warn("auth: token rejected", {
+        reason: "token bound to another bot",
+        tokenId: token.id,
+      });
+      return c.json({ error: "forbidden" }, 403);
+    }
 
     repo.registerBot(bot, new Date().toISOString());
     return c.json({
