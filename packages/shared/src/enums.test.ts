@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { BOT_STATUSES, EVENT_TYPES, PODS, TASK_RESULTS } from "./enums";
+import {
+  BOT_STATUSES,
+  EVENT_TYPES,
+  HANDOFF_STATES,
+  PODS,
+  SERVER_EVENT_TYPES,
+  TASK_RESULTS,
+} from "./enums";
 
 describe("enums", () => {
   it("lists the five bot statuses", () => {
@@ -22,5 +29,10 @@ describe("enums", () => {
   it("lists task results and pods", () => {
     expect(TASK_RESULTS).toEqual(["done", "failed", "cancelled"]);
     expect(PODS).toEqual(["command", "dev", "ops"]);
+  });
+
+  it("lists handoff states and keeps the server-only event types apart", () => {
+    expect(HANDOFF_STATES).toEqual(["sent", "accepted", "cancelled"]);
+    expect(SERVER_EVENT_TYPES).toEqual(["offline", "bot_registered"]);
   });
 });
