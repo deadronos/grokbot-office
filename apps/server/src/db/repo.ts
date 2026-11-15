@@ -1,19 +1,21 @@
 import type Database from "better-sqlite3";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { botStatus, bots, events, handoffs, tokens } from "./schema.ts";
 
 type Bot = typeof bots.$inferSelect;
+type BotPatch = Partial<Omit<Bot, "id" | "createdAt">>;
 type Status = typeof botStatus.$inferSelect;
 type Event = typeof events.$inferSelect;
 type NewEvent = typeof events.$inferInsert;
 type Handoff = typeof handoffs.$inferSelect;
-type Token = typeof tokens.$inferSelect;
+export type Token = typeof tokens.$inferSelect;
 
 export interface Repo {
   upsertBot(bot: Bot): void;
   getBot(id: string): Bot | undefined;
   listBots(): Bot[];
+  updateBot(id: string, patch: BotPatch): Bot | undefined;
   getBotStatus(botId: string): Status | undefined;
   setBotStatus(status: Status): void;
   insertEvent(event: NewEvent): { duplicate: boolean; seq: number };
@@ -23,6 +25,9 @@ export interface Repo {
   updateHandoffState(id: string, state: Handoff["state"], acceptedAt: string | null): void;
   insertToken(token: Token): void;
   findTokenByHash(hash: string): Token | undefined;
+  getToken(id: string): Token | undefined;
+  listTokens(): Token[];
+  touchToken(id: string, lastUsedAt: string): void;
   revokeToken(id: string, revokedAt: string): void;
 }
 
@@ -34,6 +39,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     },
     getBot: (id) => db.select().from(bots).where(eq(bots.id, id)).get(),
     listBots: () => db.select().from(bots).all(),
+    updateBot: (id, patch) => db.update(bots).set(patch).where(eq(bots.id, id)).returning().get(),
     getBotStatus: (id) => db.select().from(botStatus).where(eq(botStatus.botId, id)).get(),
     setBotStatus: (status) => {
       db.insert(botStatus)
@@ -70,8 +76,17 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       db.insert(tokens).values(token).run();
     },
     findTokenByHash: (hash) => db.select().from(tokens).where(eq(tokens.hash, hash)).get(),
+    getToken: (id) => db.select().from(tokens).where(eq(tokens.id, id)).get(),
+    listTokens: () => db.select().from(tokens).orderBy(tokens.createdAt, tokens.id).all(),
+    touchToken: (id, lastUsedAt) => {
+      db.update(tokens).set({ lastUsedAt }).where(eq(tokens.id, id)).run();
+    },
     revokeToken: (id, revokedAt) => {
-      db.update(tokens).set({ revokedAt }).where(eq(tokens.id, id)).run();
+      // Revocation is idempotent: keep the first timestamp.
+      db.update(tokens)
+        .set({ revokedAt })
+        .where(and(eq(tokens.id, id), isNull(tokens.revokedAt)))
+        .run();
     },
   };
 }
