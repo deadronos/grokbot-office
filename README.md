@@ -6,15 +6,16 @@ packet flying from desk to desk. Bots report in opt-in over small HTTPS calls
 (register, heartbeat, events); the browser receives live updates over SSE.
 
 This repository currently contains workspace tooling, CI, the API server and the
-web app. The web app renders the static office scene: nine fixed desks in the
-shared layout, a placeholder low-poly bot per desk and name plates. Live status,
-the HUD and handoff animation come in later issues.
+web app. The web app signs a viewer in, keeps a zustand store in sync with the
+server (`GET /api/state` plus the SSE stream) and renders the static office scene:
+nine fixed desks, a placeholder low-poly bot per desk and name plates. Live status
+visuals, the HUD list/feed and handoff animation come in later issues.
 
 ## Stack
 
 - **Runtime:** Node.js 24, TypeScript (strict)
 - **Server:** [Hono](https://hono.dev) on `@hono/node-server`
-- **Web:** React 19 + Vite + React Three Fiber (three.js) + drei
+- **Web:** React 19 + Vite + React Three Fiber (three.js) + drei + zustand
 - **Shared:** `@grokbot-office/shared` – constants and types used by both apps
 - **Tooling:** pnpm workspaces, oxlint, oxfmt, Vitest, GitHub Actions
 
@@ -42,6 +43,38 @@ pnpm dev               # server on http://127.0.0.1:8787, web on http://127.0.0.
 
 The Vite dev server proxies `/api` to the server, so `http://127.0.0.1:5173/api/health`
 works from the browser.
+
+## Web app (viewer)
+
+The web app is private too. On first load it calls `GET /api/state` with
+`credentials: "same-origin"`: a `401` shows the viewer sign-in form, a success means
+the HttpOnly session cookie is still good so the office scene renders and
+`GET /api/stream` opens.
+
+Sign in pastes a viewer token once (`pnpm admin token create --kind viewer`). The
+browser sends it as `Authorization: Bearer` to `POST /api/session`; the server answers
+with an opaque HttpOnly, `Secure`, `SameSite=Strict` cookie for `Path=/api` and a short
+TTL. The token is dropped right after the submit and is never written to
+`localStorage`, `sessionStorage`, `document.cookie` or the URL. After that every call
+uses the cookie through `credentials: "same-origin"` (the stream uses
+`withCredentials`), never the bearer header. `POST /api/session/logout` clears the
+cookie and returns to the login form.
+
+The zustand store holds the snapshot, applies stream events immutably (skipping
+`seq <= lastEventSeq` so a reconnect replay is idempotent), exposes a per-bot selector
+so one desk can re-render on its own, and calls `invalidateScene()` so the on-demand
+Canvas redraws. Connection indicator, top right:
+
+- `live` – the stream is open and event frames or 25 s pings arrive
+- `reconnecting` – the stream errored; the browser's `EventSource` retries and resumes
+  with `Last-Event-ID`
+- `office closed` – nothing arrived for 45 s while reconnecting, or the first
+  `GET /api/state` could not be reached (Mac asleep, server down)
+
+`POST /api/session` and `GET /api/stream` land with #8. The client already follows the
+contract and is tested against mocked `fetch` / `EventSource`; re-verify it against the
+real server once #8 merges. The `GET /api/state` / `GET /api/events` viewer API below is
+header-only on `main` today.
 
 ## Scripts
 
@@ -178,8 +211,8 @@ is display-only and is clamped to ±10 minutes around it.
 The viewer is private: there is no public read mode. Both read routes accept a viewer
 bearer token (`pnpm admin token create --kind viewer`) or the env `ADMIN_TOKEN` as a
 bearer token; anything else gets `401`, and a bot token gets `403`. Responses are
-`Cache-Control: no-store`. #10 adds the HttpOnly session cookie the browser needs for
-SSE, so this API is header-only for now.
+`Cache-Control: no-store`. #8 adds the HttpOnly session cookie the browser needs for
+SSE, so this API is header-only on `main` for now.
 
 `GET /api/state` is the initial snapshot: visible bots (`hidden = false`) in shared
 desk-layout order (bots outside the layout follow, by id), their current status, the
