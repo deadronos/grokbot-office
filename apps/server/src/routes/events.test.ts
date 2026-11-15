@@ -162,6 +162,29 @@ describe("POST /api/events", () => {
     await expect(again.json()).resolves.toEqual({ accepted: 1, duplicates: 0, lastSeq: 3 });
   });
 
+  it("moves the receiver onto the handed-off task, replacing its old one", async () => {
+    const { app, repo, dataToken, wesleyToken } = setup();
+    await post(
+      app,
+      wesleyToken,
+      batch({ botId: "wesley", eventId: ulid(1), type: "task_started", taskId: "old" }),
+    );
+    await post(app, dataToken, batch(ev(2, "handoff_sent", { to: "wesley", handoffId: "h2" })));
+    const res = await post(
+      app,
+      wesleyToken,
+      batch({
+        botId: "wesley",
+        eventId: ulid(3),
+        type: "handoff_accepted",
+        handoffId: "h2",
+        taskId: "review-h2",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(repo.getBotStatus("wesley")).toMatchObject({ status: "working", taskId: "review-h2" });
+  });
+
   it("keeps the sender working while another task is still open", async () => {
     const { app, repo, dataToken } = setup();
     await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t1" })));

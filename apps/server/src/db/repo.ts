@@ -260,6 +260,8 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   .run();
                 change({
                   status: "working",
+                  // The receiver now works on the handed-off task, not whatever it had before.
+                  taskId: input.taskId ?? null,
                   label: handoff.label ?? input.label ?? null,
                   handoffTo: null,
                 });

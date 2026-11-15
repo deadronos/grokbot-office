@@ -55,6 +55,11 @@ export function openDatabase(path = resolveDatabasePath()): Database.Database {
     db.pragma("foreign_keys = OFF");
     migrate(drizzle(db), { migrationsFolder: migrationsFolder() });
     db.pragma("foreign_keys = ON");
+    // With enforcement off during the rebuild, prove nothing dangling was left behind.
+    const violations = db.pragma("foreign_key_check") as unknown[];
+    if (violations.length > 0) {
+      throw new Error(`database has ${violations.length} foreign key violation(s) after migrating`);
+    }
     return db;
   } catch (error) {
     db.close();
