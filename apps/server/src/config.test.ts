@@ -4,6 +4,7 @@ import {
   DEFAULT_HEARTBEAT_INTERVAL_SEC,
   DEFAULT_HEARTBEAT_TIMEOUT_SEC,
   DEFAULT_RETENTION_DAYS,
+  RETENTION_DAYS_MAX,
   DEFAULT_SESSION_TTL_SEC,
   resolveHeartbeatConfig,
   resolveRetentionDays,
@@ -66,6 +67,13 @@ describe("resolveRetentionDays", () => {
     for (const value of ["0", "-5", "1.5", "abc", "1e3", "Infinity"]) {
       expect(() => resolveRetentionDays({ RETENTION_DAYS: value })).toThrow(/RETENTION_DAYS/);
     }
+  });
+
+  it("caps retention at 36500 days and rejects anything larger at startup", () => {
+    expect(RETENTION_DAYS_MAX).toBe(36500);
+    expect(resolveRetentionDays({ RETENTION_DAYS: "36500" })).toBe(36500);
+    expect(() => resolveRetentionDays({ RETENTION_DAYS: "36501" })).toThrow(/RETENTION_DAYS/);
+    expect(() => resolveRetentionDays({ RETENTION_DAYS: "200000000" })).toThrow(/RETENTION_DAYS/);
   });
 });
 

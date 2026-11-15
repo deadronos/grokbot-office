@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "0919b500-35b4-4a65-aceb-6fe3efefff69",
+  "id": "36e883da-1ce6-4110-9ace-09e9e3656578",
   "prevId": "cfef4920-a76b-42ae-a760-3afa92756710",
   "tables": {
     "bot_status": {
@@ -346,6 +346,13 @@
           "columns": [
             "bot_id",
             "type",
+            "handoff_id"
+          ],
+          "isUnique": false
+        },
+        "events_handoff_id_idx": {
+          "name": "events_handoff_id_idx",
+          "columns": [
             "handoff_id"
           ],
           "isUnique": false

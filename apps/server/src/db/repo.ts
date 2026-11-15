@@ -58,12 +58,18 @@ const RELEASED_LINKS = {
 /**
  * The status a heartbeat leaves behind. A heartbeat is a keep-alive, not a task event:
  * it cannot end derived `working`/`waiting` (only events or `offline` can), and moving
- * to `idle`/`offline` releases the task and handoff links.
+ * to `idle`/`offline` releases the task and handoff links. An offline bot comes back
+ * on any heartbeat: empty → `idle`, or the explicit non-offline status.
  */
 export function heartbeatPatch(
   current: Pick<Status, "status"> | undefined,
   status: Status["status"] | undefined,
 ): Partial<Status> | undefined {
+  if (current?.status === "offline") {
+    if (status === "offline") return undefined;
+    const next = status ?? "idle";
+    return RESTING_STATUSES.includes(next) ? { status: next, ...RELEASED_LINKS } : { status: next };
+  }
   if (status === undefined || status === current?.status) return undefined;
   if (current && DERIVED_STATUSES.includes(current.status) && status !== "offline") {
     return undefined;
@@ -83,13 +89,16 @@ function clampClientAt(at: string | undefined, now: string): string | null {
 
 export interface Repo {
   upsertBot(bot: Bot): void;
-  /** Upserts the bot-owned profile fields and refreshes the heartbeat; one transaction. */
-  registerBot(bot: Pick<Bot, "id" | "name" | "role" | "avatar" | "pod">, now: string): void;
+  /** Upserts the bot-owned profile fields and refreshes the heartbeat; one transaction.
+   * Returns true when an offline bot was brought back to idle (a `status_changed` event was written).
+   */
+  registerBot(bot: Pick<Bot, "id" | "name" | "role" | "avatar" | "pod">, now: string): boolean;
   /**
    * Refreshes the heartbeat and applies its status per `heartbeatPatch` (it cannot end
    * derived working/waiting except with `offline`); `since` resets only on a change.
+   * Returns true when an offline bot came back online (a `status_changed` event was written).
    */
-  touchHeartbeat(botId: string, status: Status["status"] | undefined, now: string): void;
+  touchHeartbeat(botId: string, status: Status["status"] | undefined, now: string): boolean;
   getBot(id: string): Bot | undefined;
   listBots(): Bot[];
   updateBot(id: string, patch: BotPatch): Bot | undefined;
@@ -206,7 +215,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     upsertBot: (bot) => {
       db.insert(bots).values(bot).onConflictDoUpdate({ target: bots.id, set: bot }).run();
     },
-    registerBot: (bot, now) => {
+    registerBot: (bot, now) =>
       db.transaction((tx) => {
         // The admin-owned `hidden` flag and created_at survive a re-register.
         tx.insert(bots)
@@ -222,38 +231,82 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
             },
           })
           .run();
-        // Registering counts as a heartbeat but never resets the current status.
-        tx.insert(botStatus)
-          .values({ botId: bot.id, status: "idle", since: now, lastHeartbeatAt: now })
-          .onConflictDoUpdate({ target: botStatus.botId, set: { lastHeartbeatAt: now } })
-          .run();
-      });
-    },
-    touchHeartbeat: (botId, status, now) => {
+        const existing = tx.select().from(botStatus).where(eq(botStatus.botId, bot.id)).get();
+        if (!existing) {
+          tx.insert(botStatus)
+            .values({ botId: bot.id, status: "idle", since: now, lastHeartbeatAt: now })
+            .run();
+          return false;
+        }
+        // Re-register is a keep-alive and keeps a live status, but an offline bot
+        // comes back to idle so it is not stuck after a sweep.
+        if (existing.status === "offline") {
+          const inserted = tx
+            .insert(events)
+            .values({
+              eventId: randomUUID(),
+              botId: bot.id,
+              type: "status_changed",
+              status: "idle",
+              receivedAt: now,
+            })
+            .returning({ seq: events.seq })
+            .get();
+          tx.update(botStatus)
+            .set({
+              status: "idle",
+              ...RELEASED_LINKS,
+              since: now,
+              lastHeartbeatAt: now,
+              lastEventSeq: inserted?.seq ?? null,
+            })
+            .where(eq(botStatus.botId, bot.id))
+            .run();
+          return true;
+        }
+        tx.update(botStatus).set({ lastHeartbeatAt: now }).where(eq(botStatus.botId, bot.id)).run();
+        return false;
+      }),
+    touchHeartbeat: (botId, status, now) =>
       db.transaction((tx) => {
-        const existing = tx
-          .select({ status: botStatus.status })
-          .from(botStatus)
-          .where(eq(botStatus.botId, botId))
-          .get();
+        const existing = tx.select().from(botStatus).where(eq(botStatus.botId, botId)).get();
         const patch = heartbeatPatch(existing, status);
         if (!existing) {
           tx.insert(botStatus)
             .values({ botId, status: status ?? "idle", since: now, lastHeartbeatAt: now })
             .run();
-        } else if (patch) {
-          tx.update(botStatus)
-            .set({ ...patch, since: now, lastHeartbeatAt: now })
-            .where(eq(botStatus.botId, botId))
-            .run();
-        } else {
+          return false;
+        }
+        if (!patch) {
           tx.update(botStatus)
             .set({ lastHeartbeatAt: now })
             .where(eq(botStatus.botId, botId))
             .run();
+          return false;
         }
-      });
-    },
+        // Leaving offline is visible to viewers: one status_changed, then notify.
+        const cameOnline = existing.status === "offline";
+        let lastSeq = existing.lastEventSeq;
+        if (cameOnline) {
+          const inserted = tx
+            .insert(events)
+            .values({
+              eventId: randomUUID(),
+              botId,
+              type: "status_changed",
+              status: patch.status ?? "idle",
+              receivedAt: now,
+            })
+            .returning({ seq: events.seq })
+            .get();
+          lastSeq = inserted?.seq ?? lastSeq;
+        }
+        tx.update(botStatus)
+          .set({ ...patch, since: now, lastHeartbeatAt: now, lastEventSeq: lastSeq })
+          .where(eq(botStatus.botId, botId))
+          .run();
+        return cameOnline;
+      }),
     getBot: (id) => db.select().from(bots).where(eq(bots.id, id)).get(),
     listBots: () => db.select().from(bots).all(),
     updateBot: (id, patch) => db.update(bots).set(patch).where(eq(bots.id, id)).returning().get(),
@@ -631,36 +684,19 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     pruneRetention: (cutoff) =>
       db.transaction((tx) => {
         const removedEvents = tx.delete(events).where(lt(events.receivedAt, cutoff)).run().changes;
-        const aged = tx
-          .select({ id: handoffs.id })
-          .from(handoffs)
+        // One set-delete: the events(handoff_id) index serves the NOT EXISTS check.
+        const removedHandoffs = tx
+          .delete(handoffs)
           .where(
             and(
               inArray(handoffs.state, ["accepted", "cancelled"]),
               // Age a closed handoff from its accept, else from when it was sent.
               lt(sql`coalesce(${handoffs.acceptedAt}, ${handoffs.sentAt})`, cutoff),
+              sql`not exists (select 1 from events where events.handoff_id = ${handoffs.id})`,
+              sql`not exists (select 1 from bot_status where bot_status.handoff_id = ${handoffs.id} or bot_status.label_handoff_id = ${handoffs.id})`,
             ),
           )
-          .all();
-        let removedHandoffs = 0;
-        for (const { id } of aged) {
-          const referencedByEvent = tx
-            .select({ seq: events.seq })
-            .from(events)
-            .where(eq(events.handoffId, id))
-            .limit(1)
-            .get();
-          const referencedByStatus = tx
-            .select({ botId: botStatus.botId })
-            .from(botStatus)
-            .where(or(eq(botStatus.handoffId, id), eq(botStatus.labelHandoffId, id)))
-            .limit(1)
-            .get();
-          // A live bot's current links outrank the retention window.
-          if (referencedByEvent || referencedByStatus) continue;
-          tx.delete(handoffs).where(eq(handoffs.id, id)).run();
-          removedHandoffs++;
-        }
+          .run().changes;
         return { events: removedEvents, handoffs: removedHandoffs };
       }),
   };

@@ -107,6 +107,8 @@ export const events = sqliteTable(
     index("events_bot_id_seq_idx").on(t.botId, t.seq),
     // The read-time label scrub (repo.scrubHiddenLabels) reads accepts per bot/handoff.
     index("events_bot_id_type_handoff_id_idx").on(t.botId, t.type, t.handoffId),
+    // Retention prune: closed handoffs are dropped only when no event still points at them.
+    index("events_handoff_id_idx").on(t.handoffId),
     enumCheck("events_type_check", "type", EVENT_TYPES),
     enumCheck("events_status_check", "status", BOT_STATUSES, true),
     enumCheck("events_result_check", "result", TASK_RESULTS, true),

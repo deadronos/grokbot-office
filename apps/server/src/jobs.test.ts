@@ -51,6 +51,54 @@ const working = (repo: ReturnType<typeof setup>["repo"], lastHeartbeatAt = STALE
 const offlineEvents = (repo: ReturnType<typeof setup>["repo"]) =>
   repo.getEventsPage(0, 50).rows.filter((row) => row.type === "offline");
 
+const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+
+const heartbeat = (
+  app: ReturnType<typeof setup>["app"],
+  id: string,
+  token: string,
+  payload?: unknown,
+) =>
+  app.request(`/api/bots/${id}/heartbeat`, {
+    method: "POST",
+    headers: {
+      ...auth(token),
+      ...(payload === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body:
+      payload === undefined
+        ? undefined
+        : typeof payload === "string"
+          ? payload
+          : JSON.stringify(payload),
+  });
+
+const register = (
+  app: ReturnType<typeof setup>["app"],
+  token: string,
+  payload: Record<string, unknown>,
+) =>
+  app.request("/api/bots/register", {
+    method: "POST",
+    headers: { ...auth(token), "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+const snapshotBot = async (app: ReturnType<typeof setup>["app"], token: string, id: string) => {
+  const body = (await (await app.request("/api/state", { headers: auth(token) })).json()) as {
+    bots: { id: string; status: string; since: string }[];
+  };
+  return body.bots.find((bot) => bot.id === id);
+};
+
+const PROFILE = {
+  id: "data",
+  name: "Data",
+  role: "worker",
+  avatar: "robot",
+  pod: "dev" as const,
+};
+
 describe("heartbeat sweeper", () => {
   it("takes a stale working bot offline once, clears its links and notifies", async () => {
     const { repo, hub } = setup();
@@ -163,6 +211,150 @@ describe("heartbeat sweeper", () => {
     expect(vi.getTimerCount()).toBe(1);
     stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+async function sweepData(context: ReturnType<typeof setup>) {
+  working(context.repo);
+  const token = issueToken(context.repo, { kind: "bot", botId: "data" }).token;
+  const viewerToken = issueToken(context.repo, { kind: "viewer" }).token;
+  const stop = startHeartbeatSweeper({
+    repo: context.repo,
+    hub: context.hub,
+    timeoutSec,
+  });
+  await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
+  expect(context.repo.getBotStatus("data")?.status).toBe("offline");
+  return { token, viewerToken, stop };
+}
+
+describe("coming back online after a sweep", () => {
+  it("brings the bot back with an empty heartbeat: snapshot and an SSE frame", async () => {
+    const context = setup();
+    const { app, repo, hub } = context;
+    const { token, viewerToken, stop } = await sweepData(context);
+    const notify = vi.spyOn(hub, "notify");
+
+    const sse = new Sse(await app.request("/api/stream", { headers: auth(viewerToken) }));
+    expect((await heartbeat(app, "data", token)).status).toBe(204);
+
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "idle",
+      since: at(SWEEP_INTERVAL_MS),
+    });
+    const snap = await snapshotBot(app, viewerToken, "data");
+    expect(snap).toMatchObject({ id: "data", status: "idle" });
+
+    const frame = await sse.next();
+    expect(frame.event).toBe("event");
+    expect(JSON.parse(frame.data)).toMatchObject({
+      botId: "data",
+      type: "status_changed",
+      status: "idle",
+    });
+    expect(notify).toHaveBeenCalled();
+    await sse.cancel();
+    stop();
+  });
+
+  it("emits a status_changed event for a heartbeat with status idle after a sweep", async () => {
+    const context = setup();
+    const { app, repo } = context;
+    const { token, stop } = await sweepData(context);
+
+    expect((await heartbeat(app, "data", token, { status: "idle" })).status).toBe(204);
+    expect(repo.getBotStatus("data")?.status).toBe("idle");
+    const online = repo
+      .getEventsPage(0, 50)
+      .rows.filter((row) => row.type === "status_changed" && row.status === "idle");
+    expect(online).toHaveLength(1);
+    expect(online[0]).toMatchObject({ botId: "data", type: "status_changed", status: "idle" });
+    stop();
+  });
+
+  it("resets an offline bot to idle on re-register", async () => {
+    const context = setup();
+    const { app, repo } = context;
+    const { token, viewerToken, stop } = await sweepData(context);
+    const sinceOffline = repo.getBotStatus("data")?.since;
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect((await register(app, token, PROFILE)).status).toBe(200);
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "idle",
+      since: at(SWEEP_INTERVAL_MS + 1000),
+    });
+    expect(sinceOffline).toBe(at(SWEEP_INTERVAL_MS));
+    expect(await snapshotBot(app, viewerToken, "data")).toMatchObject({
+      id: "data",
+      status: "idle",
+    });
+    const online = repo
+      .getEventsPage(0, 50)
+      .rows.filter((row) => row.type === "status_changed" && row.botId === "data");
+    expect(online).toHaveLength(1);
+    expect(online[0].status).toBe("idle");
+    stop();
+  });
+
+  it("emits no extra event for a heartbeat on an already-online bot", async () => {
+    const context = setup();
+    const { app, repo, hub } = context;
+    const { token, stop } = await sweepData(context);
+    await heartbeat(app, "data", token);
+    expect(
+      repo.getEventsPage(0, 50).rows.filter((row) => row.type === "status_changed"),
+    ).toHaveLength(1);
+
+    const notify = vi.spyOn(hub, "notify");
+    const before = repo.lastEventSeq();
+    expect((await heartbeat(app, "data", token)).status).toBe(204);
+    expect((await heartbeat(app, "data", token, { status: "idle" })).status).toBe(204);
+    expect(repo.getBotStatus("data")?.status).toBe("idle");
+    expect(repo.lastEventSeq()).toBe(before);
+    expect(
+      repo.getEventsPage(0, 50).rows.filter((row) => row.type === "status_changed"),
+    ).toHaveLength(1);
+    expect(notify).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("hides a hidden bot's come-back event from viewers", async () => {
+    const context = setup();
+    const { app, repo } = context;
+    repo.upsertBot({ ...botRecord("ghost"), hidden: true });
+    repo.setBotStatus({
+      botId: "ghost",
+      status: "working",
+      label: "secret",
+      taskId: "t-hidden",
+      handoffTo: null,
+      handoffId: null,
+      labelHandoffId: null,
+      since: STALE,
+      lastHeartbeatAt: STALE,
+      lastEventSeq: null,
+    });
+    const ghostToken = issueToken(repo, { kind: "bot", botId: "ghost" }).token;
+    const { token, viewerToken, stop } = await sweepData(context);
+    expect(repo.getBotStatus("ghost")?.status).toBe("offline");
+
+    const sse = new Sse(await app.request("/api/stream", { headers: auth(viewerToken) }));
+    expect((await heartbeat(app, "ghost", ghostToken)).status).toBe(204);
+    expect(repo.getBotStatus("ghost")?.status).toBe("idle");
+    const page = repo.getEventsPage(0, 50).rows;
+    expect(page.filter((row) => row.botId === "ghost")).toEqual([]);
+    expect(await snapshotBot(app, viewerToken, "ghost")).toBeUndefined();
+
+    expect((await heartbeat(app, "data", token)).status).toBe(204);
+    const frame = await sse.next();
+    expect(JSON.parse(frame.data)).toMatchObject({
+      botId: "data",
+      type: "status_changed",
+      status: "idle",
+    });
+    await sse.cancel();
+    stop();
   });
 });
 
