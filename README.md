@@ -5,14 +5,16 @@ is idle, working, waiting, reviewing or offline, and handoffs are animated as a
 packet flying from desk to desk. Bots report in opt-in over small HTTPS calls
 (register, heartbeat, events); the browser receives live updates over SSE.
 
-This repository currently contains the scaffold: workspace tooling, CI, a minimal
-API server and a minimal web page. The office scene comes in later issues.
+This repository currently contains workspace tooling, CI, the API server and the
+web app. The web app renders the static office scene: nine fixed desks in the
+shared layout, a placeholder low-poly bot per desk and name plates. Live status,
+the HUD and handoff animation come in later issues.
 
 ## Stack
 
 - **Runtime:** Node.js 24, TypeScript (strict)
 - **Server:** [Hono](https://hono.dev) on `@hono/node-server`
-- **Web:** React 19 + Vite
+- **Web:** React 19 + Vite + React Three Fiber (three.js) + drei
 - **Shared:** `@grokbot-office/shared` – constants and types used by both apps
 - **Tooling:** pnpm workspaces, oxlint, oxfmt, Vitest, GitHub Actions
 
@@ -20,7 +22,7 @@ API server and a minimal web page. The office scene comes in later issues.
 
 ```text
 apps/server        Hono API (GET /api/health), testable app module + boot entry
-apps/web           Vite + React page
+apps/web           Vite + React Three Fiber office scene
 packages/shared    Constants and types shared by server and web
 .github/workflows  CI
 ```
