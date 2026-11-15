@@ -6,6 +6,7 @@ import {
   BAD_RESPONSE_MESSAGE,
   BAD_TOKEN_MESSAGE,
   CLOSED_AFTER_MS,
+  NOT_VIEWER_MESSAGE,
   UNREACHABLE_MESSAGE,
   selectBot,
   useOfficeStore,
@@ -181,7 +182,8 @@ describe("checkSession", () => {
 
 describe("login", () => {
   it("exchanges the token for a cookie session and drops the token", async () => {
-    fetchMock.mockResolvedValueOnce(emptyResponse(204));
+    useOfficeStore.setState({ phase: "login" });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ expiresAt: "2026-01-01T01:00:00.000Z" }, 201));
     fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
 
     await useOfficeStore.getState().login("viewer-test-token");
@@ -210,6 +212,27 @@ describe("login", () => {
     expect(localStorage.setItem).not.toHaveBeenCalled();
     expect(sessionStorage.setItem).not.toHaveBeenCalled();
   });
+
+  it("rejects a bot token or the admin bearer", async () => {
+    useOfficeStore.setState({ phase: "login" });
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+
+    await useOfficeStore.getState().login("bot-token");
+
+    expect(useOfficeStore.getState().error).toBe(NOT_VIEWER_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("only accepts 201, not any other success status", async () => {
+    useOfficeStore.setState({ phase: "login" });
+    fetchMock.mockResolvedValueOnce(emptyResponse(200));
+
+    await useOfficeStore.getState().login("viewer-test-token");
+
+    expect(useOfficeStore.getState().phase).toBe("login");
+    expect(useOfficeStore.getState().error).toBe("Sign in failed (200).");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("logout", () => {
@@ -232,12 +255,23 @@ describe("logout", () => {
     expect(state.lastEventSeq).toBe(0);
     expect(source?.closed).toBe(true);
   });
+
+  it("returns to the login form even when the logout call fails", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    fetchMock.mockRejectedValueOnce(new TypeError("network down"));
+
+    await useOfficeStore.getState().logout();
+
+    expect(useOfficeStore.getState().phase).toBe("login");
+    expect(useOfficeStore.getState().bots).toEqual({});
+  });
 });
 
 describe("stream", () => {
-  it("opens the stream with credentials", () => {
+  it("opens the stream with credentials and asks for the events after the snapshot", () => {
     const source = startStream();
-    expect(source.url).toBe("/api/stream");
+    expect(source.url).toBe("/api/stream?since=0");
     expect(source.init?.withCredentials).toBe(true);
   });
 
@@ -245,6 +279,7 @@ describe("stream", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
     await useOfficeStore.getState().checkSession();
     const source = startStream();
+    expect(source.url).toBe("/api/stream?since=7");
 
     source.emit("open");
     expect(useOfficeStore.getState().connection).toBe("live");
@@ -309,14 +344,22 @@ describe("stream", () => {
   it("goes reconnecting on error, stays live on ping, then closed after the grace period", () => {
     vi.useFakeTimers();
     const source = startStream();
+    fetchMock.mockResolvedValue(jsonResponse(snapshot));
 
     source.emit("open");
     expect(useOfficeStore.getState().connection).toBe("live");
+    invalidateScene.mockClear();
+
+    source.emit("ping", "{}");
+    expect(useOfficeStore.getState().connection).toBe("live");
+    expect(useOfficeStore.getState().lastEventSeq).toBe(0);
+    expect(invalidateScene).not.toHaveBeenCalled();
 
     source.emit("error");
     expect(useOfficeStore.getState().connection).toBe("reconnecting");
+    expect(source.closed).toBe(false);
 
-    source.emit("ping");
+    source.emit("ping", "{}");
     expect(useOfficeStore.getState().connection).toBe("live");
 
     source.emit("error");
@@ -324,6 +367,24 @@ describe("stream", () => {
     expect(useOfficeStore.getState().connection).toBe("reconnecting");
     vi.advanceTimersByTime(1);
     expect(useOfficeStore.getState().connection).toBe("closed");
+  });
+
+  it("returns to login when the stream dies and the session is gone", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+    source.emit("open");
+
+    fetchMock.mockResolvedValueOnce(emptyResponse(401));
+    source.emit("error");
+
+    await vi.waitFor(() => expect(useOfficeStore.getState().phase).toBe("login"));
+    const state = useOfficeStore.getState();
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/state", { credentials: "same-origin" });
+    expect(source.closed).toBe(true);
+    expect(state.bots).toEqual({});
+    expect(state.lastEventSeq).toBe(0);
+    expect(state.error).toBeNull();
   });
 
   it("re-renders one bot without touching the others", async () => {

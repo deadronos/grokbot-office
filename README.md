@@ -52,29 +52,42 @@ the HttpOnly session cookie is still good so the office scene renders and
 `GET /api/stream` opens.
 
 Sign in pastes a viewer token once (`pnpm admin token create --kind viewer`). The
-browser sends it as `Authorization: Bearer` to `POST /api/session`; the server answers
-with an opaque HttpOnly, `Secure`, `SameSite=Strict` cookie for `Path=/api` and a short
-TTL. The token is dropped right after the submit and is never written to
-`localStorage`, `sessionStorage`, `document.cookie` or the URL. After that every call
-uses the cookie through `credentials: "same-origin"` (the stream uses
-`withCredentials`), never the bearer header. `POST /api/session/logout` clears the
-cookie and returns to the login form.
+browser sends it as `Authorization: Bearer` to `POST /api/session`; success is `201`
+with `{ "expiresAt": <ISO datetime> }` (the client ignores it) and the cookie
+`__Secure-bo_session=<secret>; HttpOnly; Secure; SameSite=Strict; Path=/api;
+Max-Age=<ttl>`, set by the server and never read or written by the client. Anything
+else is a failure: `401` for a missing, unknown or revoked token, `403` for a bot
+or admin token (the form says so), and any other status is reported generically.
+The token is dropped right after the submit and is never written to `localStorage`,
+`sessionStorage`, `document.cookie` or the URL. After that every call uses the cookie
+through `credentials: "same-origin"` (the stream uses `withCredentials`), never the
+bearer header and never a `?token=`/`?session=` query. `POST /api/session/logout`
+always answers `204` (no auth, idempotent) and returns to the login form.
+
+On first open the stream URL is `/api/stream?since=<lastEventSeq>` (canonical digits,
+so events between the snapshot and the first frame are not lost). The URL is left
+alone afterwards: when the browser reconnects `EventSource` sends `Last-Event-ID`
+from the last frame it saw, and the server prefers that header over `?since=`.
 
 The zustand store holds the snapshot, applies stream events immutably (skipping
 `seq <= lastEventSeq` so a reconnect replay is idempotent), exposes a per-bot selector
 so one desk can re-render on its own, and calls `invalidateScene()` so the on-demand
 Canvas redraws. Connection indicator, top right:
 
-- `live` – the stream is open and event frames or 25 s pings arrive
+- `live` – the stream is open and event frames or 25 s `ping` frames (`data: {}`) arrive
 - `reconnecting` – the stream errored; the browser's `EventSource` retries and resumes
-  with `Last-Event-ID`
+  with `Last-Event-ID`. An expired or revoked session ends the open stream at the next
+  ping, so each error also probes `GET /api/state`: a `401` there means the cookie is
+  gone, the stream is closed and the viewer goes back to the login form
 - `office closed` – nothing arrived for 45 s while reconnecting, or the first
-  `GET /api/state` could not be reached (Mac asleep, server down)
+  `GET /api/state` could not be reached (Mac asleep, server down); a probe that cannot
+  reach the server keeps this timer running
 
-`POST /api/session` and `GET /api/stream` land with #8. The client already follows the
-contract and is tested against mocked `fetch` / `EventSource`; re-verify it against the
-real server once #8 merges. The `GET /api/state` / `GET /api/events` viewer API below is
-header-only on `main` today.
+`POST /api/session`, the `__Secure-bo_session` cookie and `GET /api/stream` are
+implemented on the server in #8 (PR 40). The client follows the PR contract and is
+tested against mocked `fetch` / `EventSource`; re-verify it against the real server
+once that PR merges. The `GET /api/state` / `GET /api/events` viewer API below still
+accepts only a bearer header on `main` today.
 
 ## Scripts
 

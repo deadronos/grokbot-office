@@ -14,6 +14,7 @@ export const CLOSED_AFTER_MS = 45_000;
 export const UNREACHABLE_MESSAGE = "Can't reach the office. Check that the server is running.";
 export const BAD_RESPONSE_MESSAGE = "The office sent an unexpected response.";
 export const BAD_TOKEN_MESSAGE = "That viewer token was not accepted.";
+export const NOT_VIEWER_MESSAGE = "That token cannot sign in here. Use a viewer token.";
 
 export type Phase = "checking" | "login" | "ready";
 /** `live`: stream open and frames flowing. `reconnecting`: stream errored, EventSource retries. */
@@ -213,11 +214,16 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
         set({ pending: false, error: BAD_TOKEN_MESSAGE });
         return;
       }
-      if (!response.ok) {
+      if (response.status === 403) {
+        set({ pending: false, error: NOT_VIEWER_MESSAGE });
+        return;
+      }
+      // Only 201 creates a session; any other answer (even another 2xx) is a failure.
+      if (response.status !== 201) {
         set({ pending: false, error: `Sign in failed (${response.status}).` });
         return;
       }
-      // The cookie carries the session from here on; the token is never kept.
+      // The `__Secure-bo_session` cookie carries the session from here on; the token is never kept.
       await get().checkSession();
     } catch {
       set({ pending: false, error: UNREACHABLE_MESSAGE });
@@ -239,24 +245,62 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
 
   startStream: () => {
     stopStream?.();
-    const close = openMessageStream({
-      onOpen: () => {
-        clearClosedTimer();
-        set({ connection: "live" });
+    let probing = false;
+    let close: (() => void) | undefined;
+
+    /** A 401 probe means the cookie is gone: stop retrying and ask for a token. */
+    function expire() {
+      close?.();
+      close = undefined;
+      stopStream = undefined;
+      clearClosedTimer();
+      set({
+        ...EMPTY_DATA,
+        phase: "login",
+        connection: "reconnecting",
+        pending: false,
+        error: null,
+      });
+      invalidateScene();
+    }
+
+    /** EventSource hides the HTTP status, so the store asks `/api/state` instead. */
+    async function probeSession(): Promise<void> {
+      if (probing) return;
+      probing = true;
+      try {
+        const response = await fetch(STATE_PATH, { credentials: "same-origin" });
+        if (response.status === 401) expire();
+      } catch {
+        // Unreachable probe: keep the "office closed" timer running.
+      } finally {
+        probing = false;
+      }
+    }
+
+    close = openMessageStream(
+      {
+        onOpen: () => {
+          clearClosedTimer();
+          set({ connection: "live" });
+        },
+        onPing: () => {
+          clearClosedTimer();
+          set({ connection: "live" });
+        },
+        onEvent: (event) => get().applyEvent(event),
+        onError: () => {
+          set({ connection: "reconnecting" });
+          // EventSource retries; if it is still down after the grace period, the office is gone.
+          closedTimer ??= setTimeout(() => set({ connection: "closed" }), CLOSED_AFTER_MS);
+          void probeSession();
+        },
       },
-      onPing: () => {
-        clearClosedTimer();
-        set({ connection: "live" });
-      },
-      onEvent: (event) => get().applyEvent(event),
-      onError: () => {
-        set({ connection: "reconnecting" });
-        // EventSource retries; if it is still down after the grace period, the office is gone.
-        closedTimer ??= setTimeout(() => set({ connection: "closed" }), CLOSED_AFTER_MS);
-      },
-    });
+      get().lastEventSeq,
+    );
     const stop = () => {
-      close();
+      close?.();
+      close = undefined;
       stopStream = undefined;
       clearClosedTimer();
     };

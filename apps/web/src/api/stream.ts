@@ -21,11 +21,19 @@ function parseFrame(data: unknown): StreamEvent | undefined {
 }
 
 /**
+ * First open asks for what landed after the snapshot. The browser's own reconnect
+ * keeps this URL and resumes with `Last-Event-ID`, which the server prefers.
+ */
+export function streamUrl(since: number): string {
+  return `${STREAM_PATH}?since=${since}`;
+}
+
+/**
  * Opens the SSE stream. `EventSource` reconnects on its own and resumes with the
  * `Last-Event-ID` header, so the store only has to mirror its state.
  */
-export function openMessageStream(handlers: StreamHandlers): () => void {
-  const source = new EventSource(STREAM_PATH, { withCredentials: true });
+export function openMessageStream(handlers: StreamHandlers, since: number): () => void {
+  const source = new EventSource(streamUrl(since), { withCredentials: true });
   source.addEventListener("open", handlers.onOpen);
   source.addEventListener("error", handlers.onError);
   source.addEventListener("ping", handlers.onPing);
