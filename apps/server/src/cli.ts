@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-import { issueToken, TOKEN_KINDS, type TokenKind } from "./auth/tokens.ts";
+import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
 import type { Repo } from "./db/repo.ts";
 import { createSqliteRepo } from "./db/repo.ts";
@@ -19,9 +19,9 @@ function flag(args: string[], name: string): string | undefined {
 }
 
 export function tokenCreate(repo: Repo, args: string[], out: Output): void {
-  const kind = flag(args, "--kind") as TokenKind | undefined;
-  if (!kind || !TOKEN_KINDS.includes(kind))
-    throw new Error(`--kind must be one of ${TOKEN_KINDS.join(", ")}`);
+  // Admin access stays env-only (ADMIN_TOKEN), matching POST /api/admin/tokens.
+  const kind = flag(args, "--kind");
+  if (kind !== "bot" && kind !== "viewer") throw new Error("--kind must be one of bot, viewer");
   const botId = flag(args, "--bot");
   if (kind === "bot") {
     if (!botId) throw new Error("--bot <slug> is required for bot tokens");
@@ -31,7 +31,7 @@ export function tokenCreate(repo: Repo, args: string[], out: Output): void {
   }
 
   const issued = issueToken(repo, { kind, botId: kind === "bot" ? botId : null });
-  const subject = issued.botId ? `bot "${issued.botId}"` : `${issued.kind} token`;
+  const subject = issued.botId ? `bot token for "${issued.botId}"` : `${issued.kind} token`;
   out(`Created ${subject} (id ${issued.id}, prefix ${issued.prefix}).`);
   out(issued.token);
   out("Store it now: it is not shown again.");

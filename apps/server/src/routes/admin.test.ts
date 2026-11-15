@@ -178,6 +178,9 @@ describe("admin token endpoints", () => {
     expect((await patch("nobody", { name: "x" })).status).toBe(404);
     expect((await patch("data", { pod: "moon" })).status).toBe(400);
     expect((await patch("data", { name: "" })).status).toBe(400);
+    expect((await patch("data", { name: "\n\t" })).status).toBe(400);
+    expect((await patch("data", { role: " Lead\u200B  dev\n" })).status).toBe(200);
+    expect(repo.getBot("data")?.role).toBe("Lead dev");
     expect((await patch("data", { colour: "red" })).status).toBe(400);
     expect((await patch("Bad Slug", { name: "x" })).status).toBe(400);
   });

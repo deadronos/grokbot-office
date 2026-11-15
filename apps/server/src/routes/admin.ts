@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Hono } from "hono";
 
-import { BotId, podSchema } from "@grokbot-office/shared";
+import { BotId, RegisterBody } from "@grokbot-office/shared";
 
 import type { AppEnv } from "../auth/middleware.ts";
 import { issueToken } from "../auth/tokens.ts";
@@ -15,10 +15,11 @@ const CreateTokenBody = z.object({
 
 const PatchBotBody = z
   .object({
-    name: z.string().min(1).max(40).optional(),
-    role: z.string().min(1).max(60).optional(),
-    avatar: z.string().min(1).max(60).optional(),
-    pod: podSchema.optional(),
+    // Same sanitizing and caps as registration.
+    name: RegisterBody.shape.name.optional(),
+    role: RegisterBody.shape.role.optional(),
+    avatar: RegisterBody.shape.avatar.optional(),
+    pod: RegisterBody.shape.pod.optional(),
     deskIndex: z.number().int().nonnegative().nullable().optional(),
     hidden: z.boolean().optional(),
   })

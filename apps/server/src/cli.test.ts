@@ -35,7 +35,7 @@ describe("admin CLI commands", () => {
     tokenCreate(repo, ["--kind", "bot", "--bot", "data"], out);
 
     const [summary, token, warning] = lines;
-    expect(summary).toContain('bot "data"');
+    expect(summary).toContain('bot token for "data"');
     expect(token).toBeDefined();
     expect(warning).toContain("not shown again");
     expect(lines.join("\n").split(token!).length - 1).toBe(1);
@@ -55,6 +55,7 @@ describe("admin CLI commands", () => {
     );
     expect(() => tokenCreate(repo, ["--kind", "bot"], out)).toThrow(/--bot/);
     expect(() => tokenCreate(repo, ["--kind", "party"], out)).toThrow(/--kind/);
+    expect(() => tokenCreate(repo, ["--kind", "admin"], out)).toThrow(/--kind/);
     expect(() => tokenCreate(repo, ["--kind", "viewer", "--bot", "data"], out)).toThrow(/--bot/);
   });
 
