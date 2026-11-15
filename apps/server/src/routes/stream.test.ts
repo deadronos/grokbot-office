@@ -345,6 +345,47 @@ describe("GET /api/stream keepalive", () => {
     await sse.ended();
     expect(hub.size()).toBe(0);
   });
+
+  it("ends a stream whose session went idle, and keeps a live one seen", async () => {
+    const { app, db, viewerToken, hub } = setup({ pingIntervalMs: 10 });
+    const cookie = await sessionCookie(app, viewerToken);
+
+    const res = await open(app, { cookie });
+    expect(res.status).toBe(200);
+    expect(hub.size()).toBe(1);
+    // The open refreshed last_seen_at; go stale now and let the next ping notice.
+    db.prepare("update sessions set last_seen_at = ?").run("2000-01-01T00:00:00.000Z");
+
+    const sse = new Sse(res);
+    await sse.ended();
+    expect(hub.size()).toBe(0);
+  });
+
+  it("refreshes last_seen_at on every ping", async () => {
+    const { app, db, viewerToken } = setup({ pingIntervalMs: 10 });
+    const sse = new Sse(await open(app, { cookie: await sessionCookie(app, viewerToken) }));
+    const stale = new Date(Date.now() - 1_800_000).toISOString();
+    db.prepare("update sessions set last_seen_at = ?").run(stale);
+
+    await sse.next();
+    const row = db.prepare("select last_seen_at from sessions").get() as {
+      last_seen_at: string;
+    };
+    expect(Date.parse(row.last_seen_at)).toBeGreaterThan(Date.parse(stale));
+    await sse.cancel();
+  });
+
+  it("does not rotate the cookie on an open stream", async () => {
+    const { app, db, viewerToken } = setup();
+    const cookie = await sessionCookie(app, viewerToken);
+    // Older than the rotation age, still well inside the idle window.
+    db.prepare("update sessions set created_at = ?").run("2000-01-01T00:00:00.000Z");
+
+    const res = await open(app, { cookie });
+    expect(res.status).toBe(200);
+    expect(res.headers.getSetCookie()).toHaveLength(0);
+    await res.body?.cancel();
+  });
 });
 
 describe("GET /api/stream lifecycle", () => {

@@ -3,6 +3,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 import type { AppEnv } from "../auth/middleware.ts";
 import { requireToken } from "../auth/middleware.ts";
+import { guardCookieMutation } from "../auth/csrf.ts";
 import { createSession, SESSION_COOKIE_NAME, sessionCookieOptions } from "../auth/session.ts";
 import { hashToken } from "../auth/tokens.ts";
 import type { Repo } from "../db/repo.ts";
@@ -18,16 +19,26 @@ export function sessionRoutes({
   repo,
   adminToken,
   sessionTtlSec,
+  sessionMaxPerToken,
+  corsOrigins,
 }: {
   repo: Repo;
   adminToken: string | undefined;
   sessionTtlSec: number;
+  sessionMaxPerToken: number;
+  corsOrigins: readonly string[];
 }) {
   const api = new Hono<AppEnv>();
 
   // Any request body is ignored on purpose: the bearer token decides everything.
   api.post("/", requireToken({ repo, kind: "viewer", adminToken }), (c) => {
-    const { secret, expiresAt } = createSession(repo, c.get("token").id, nowUtc(), sessionTtlSec);
+    const { secret, expiresAt } = createSession(
+      repo,
+      c.get("token").id,
+      nowUtc(),
+      sessionTtlSec,
+      sessionMaxPerToken,
+    );
     setCookie(c, SESSION_COOKIE_NAME, secret, sessionCookieOptions(sessionTtlSec));
     c.header("Cache-Control", "no-store");
     return c.json({ expiresAt }, 201);
@@ -35,7 +46,10 @@ export function sessionRoutes({
 
   // Idempotent and unauthenticated: no cookie, an unknown cookie or a dead session
   // all just clear the cookie and answer 204, so there is nothing to probe.
+  // It still refuses a cross-site caller, or a foreign page could log the viewer out.
   api.post("/logout", (c) => {
+    const refused = guardCookieMutation(c, corsOrigins);
+    if (refused) return refused;
     const secret = getCookie(c, SESSION_COOKIE_NAME);
     if (secret !== undefined) {
       const session = repo.findSessionByHash(hashToken(secret));

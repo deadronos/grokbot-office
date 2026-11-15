@@ -269,7 +269,71 @@ curl -sS -o /dev/null -X POST http://127.0.0.1:8787/api/session/logout -b jar.tx
 
 The cookie is `__Secure-bo_session`, `HttpOnly`, `Secure`, `SameSite=Strict`,
 `Path=/api`, and expires with the session: `SESSION_TTL_SEC` (default 28800, at most 604800) is validated at startup. Any request body to `POST /api/session` is ignored.
-Sessions expired for over a day are deleted the next time one is created.
+
+Each viewer token may hold `SESSION_MAX_PER_TOKEN` sessions at once (default 5, at most
+50). Creating one past the cap revokes the oldest session of that token, so a leaked
+cookie does not accumulate: it is replaced, not joined. Expired rows are dropped in the
+same transaction, so dead sessions never count. A session also ends after
+`SESSION_IDLE_SEC` without a request (default 3600, never above the TTL), and its cookie
+secret is replaced after `SESSION_ROTATE_SEC` (default 900) on the next non-stream
+request that presents it: the response carries a fresh `Set-Cookie` with the remaining
+TTL and the old secret answers `401`. An open `GET /api/stream` never rotates (it cannot
+read a new cookie) but does keep the session awake, on open and on every ping.
+
+All three failure modes look the same from outside: a generic
+`401 {"error":"unauthorized"}`, like any other rejected credential.
+
+Cookie-authenticated writes (`POST /api/session/logout`) are checked against `Origin`
+first: a present origin that is neither in `CORS_ORIGINS` nor the request's own origin
+gets `403 {"error":"forbidden"}` and changes nothing. Requests without `Origin` (curl)
+and browsers reporting `Sec-Fetch-Site: same-origin`/`same-site` are allowed. Reads never
+need an origin, so the viewer keeps working.
+
+### CORS and rate limits
+
+`CORS_ORIGINS` is a comma-separated list of exact origins (scheme, host, port), empty by
+default. Only a listed origin is reflected, always together with
+`Access-Control-Allow-Credentials: true`, and `*` never appears next to credentials.
+Preflight `OPTIONS` requests are answered before any auth or body read; an unlisted
+origin gets a headerless `204` and the browser blocks the real request. The Vite dev
+proxy is covered without configuration: the request's own origin is always trusted.
+
+Two token-bucket budgets apply: `RATE_LIMIT_PER_MIN` (default 60) with
+`RATE_LIMIT_BURST` (default 20) per authenticated token or session, and
+`RATE_LIMIT_IP_PER_MIN` (default 30) with `RATE_LIMIT_IP_BURST` (default 10) per client
+address for unauthenticated requests. A burst above its per-minute budget is rejected at
+startup. Over the limit the answer is `429 {"error":"rate limited"}` with `Retry-After`;
+`GET /api/health` is exempt, and rejected credentials still count. The address comes from
+the socket, never from `X-Forwarded-For`, because the server binds loopback: a local
+proxy connects from `127.0.0.1`, which is all this limit is for.
+
+### Security headers
+
+Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer` and
+`Permissions-Policy: camera=(), microphone=(), geolocation=()`. `/api` responses add a
+closed CSP (`default-src 'none'; frame-ancestors 'none'; base-uri 'none'`); the web app
+is served with a CSP that allows only same-origin scripts and styles, with no
+`unsafe-eval` (`style-src` keeps `'unsafe-inline'` for React's style attributes), and
+`frame-ancestors 'none'`, so the viewer cannot be framed either.
+
+### Public bot API, private viewer
+
+`VIEWER_TAILNET_ONLY=true` splits the two surfaces onto two loopback listeners: `PORT`
+(default 8787) then serves only `POST /api/bots/register`, `POST /api/bots/:id/heartbeat`,
+`POST /api/events` and `GET /api/health`; the viewer, session, admin and stream routes
+answer `404` there. `VIEWER_PORT` (default 8788) serves everything else plus the built web
+app from `apps/web/dist` (or `WEB_DIST`). Both bind `127.0.0.1`, so only Tailscale
+Funnel/serve decides what leaves the machine: point the funnel at `PORT` and reach the
+viewer over the tailnet at `VIEWER_PORT`. Leave it unset or `false` for the single-port
+development setup. Shutdown closes both listeners.
+
+The cookie flags stay as they are under Funnel: `Secure` is required for
+`__Secure-` to be honoured at all, `SameSite=Strict` stops any other site from driving
+the viewer with the cookie, and `HttpOnly` keeps it away from scripts. There is no
+`Secure=false` escape hatch; a plain-HTTP deployment is out of scope. The bot API needs
+none of this: it uses bearer tokens in an `Authorization` header, which cross-site
+requests cannot set without a preflight the allowlist would refuse.
 
 `GET /api/state` is the initial snapshot: visible bots (`hidden = false`) in shared
 desk-layout order (bots outside the layout follow, by id), their current status, the

@@ -5,7 +5,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
 import type { AppEnv } from "../auth/middleware.ts";
-import { requireViewer, validateViewer } from "../auth/middleware.ts";
+import { requireViewer, validateViewer, type ViewerSessionPolicy } from "../auth/middleware.ts";
 import { SESSION_COOKIE_NAME } from "../auth/session.ts";
 import type { Repo } from "../db/repo.ts";
 import type { StreamHub } from "../stream/hub.ts";
@@ -68,16 +68,20 @@ export function streamRoutes({
   repo,
   adminToken,
   hub,
+  policy,
   config = DEFAULT_STREAM_CONFIG,
 }: {
   repo: Repo;
   adminToken: string | undefined;
   hub: StreamHub;
+  policy: ViewerSessionPolicy;
   config?: StreamConfig;
 }) {
   const api = new Hono<AppEnv>();
 
-  api.get("/", requireViewer({ repo, adminToken }), (c) => {
+  // No rotation here: this response is one long connection, so a new cookie could not
+  // reach it. Pings still refresh `last_seen_at` and re-check the credential.
+  api.get("/", requireViewer({ repo, adminToken, policy, rotate: false }), (c) => {
     const parsed = parseStreamCursor(c);
     if (!parsed) return c.json({ error: "invalid query" }, 400);
     if (hub.size() >= config.maxClients) {
@@ -158,12 +162,21 @@ export function streamRoutes({
       // frame then finds a timer to clear instead of leaking one.
       timer = setInterval(() => {
         if (stopped) return;
-        // A session can expire or be revoked, and a token can die: pings are the check.
-        const check = validateViewer({ repo, adminToken, header, secret, now: nowUtc() });
+        // A session can expire, go idle or be revoked, and a token can die: pings are the check.
+        const check = validateViewer({
+          repo,
+          adminToken,
+          header,
+          secret,
+          now: nowUtc(),
+          idleSec: policy.idleSec,
+        });
         if (!check.ok) {
           stop();
           return;
         }
+        // An open stream is activity: without this an idle viewer's cookie dies under it.
+        if (check.session) repo.touchSession(check.session.id, nowUtc());
         stream.writeSSE({ event: "ping", data: "{}" }).catch(stop);
       }, config.pingIntervalMs);
 

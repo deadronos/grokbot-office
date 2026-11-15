@@ -5,7 +5,7 @@ import { z } from "zod";
 import { EventsBatch } from "@grokbot-office/shared";
 
 import type { AppEnv } from "../auth/middleware.ts";
-import { requireToken, requireViewer } from "../auth/middleware.ts";
+import { requireToken, requireViewer, type ViewerSessionPolicy } from "../auth/middleware.ts";
 import { InvalidEventError, type Repo } from "../db/repo.ts";
 import type { StreamHub } from "../stream/hub.ts";
 import { nowUtc } from "../time.ts";
@@ -59,14 +59,16 @@ export function eventRoutes({
   repo,
   adminToken,
   hub,
+  policy,
 }: {
   repo: Repo;
   adminToken: string | undefined;
   hub: StreamHub;
+  policy: ViewerSessionPolicy;
 }) {
   const api = new Hono<AppEnv>();
 
-  api.get("/", requireViewer({ repo, adminToken }), (c) => {
+  api.get("/", requireViewer({ repo, adminToken, policy }), (c) => {
     const query = parseEventsQuery(c);
     if (!query) return c.json({ error: "invalid query" }, 400);
 

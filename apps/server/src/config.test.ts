@@ -5,10 +5,18 @@ import {
   DEFAULT_HEARTBEAT_TIMEOUT_SEC,
   DEFAULT_RETENTION_DAYS,
   RETENTION_DAYS_MAX,
+  DEFAULT_SESSION_IDLE_SEC,
+  DEFAULT_SESSION_ROTATE_SEC,
   DEFAULT_SESSION_TTL_SEC,
+  SESSION_MAX_PER_TOKEN_LIMIT,
   resolveHeartbeatConfig,
   resolveRetentionDays,
+  resolveCorsOrigins,
+  resolvePort,
+  resolveRateLimitConfig,
+  resolveSessionConfig,
   resolveSessionTtlSec,
+  resolveViewerTailnetOnly,
   SESSION_TTL_MAX_SEC,
 } from "./config.ts";
 
@@ -101,5 +109,137 @@ describe("resolveSessionTtlSec", () => {
     expect(() =>
       resolveSessionTtlSec({ SESSION_TTL_SEC: String(SESSION_TTL_MAX_SEC + 1) }),
     ).toThrow(/SESSION_TTL_SEC/);
+  });
+});
+
+describe("resolveSessionConfig", () => {
+  it("caps sessions per token at five by default", () => {
+    expect(resolveSessionConfig({}).maxPerToken).toBe(5);
+    expect(resolveSessionConfig({ SESSION_MAX_PER_TOKEN: "20" }).maxPerToken).toBe(20);
+  });
+
+  it("rejects a cap that is not a positive integer or is above fifty", () => {
+    for (const value of ["0", "-1", "1.5", "abc", String(SESSION_MAX_PER_TOKEN_LIMIT + 1)]) {
+      expect(() => resolveSessionConfig({ SESSION_MAX_PER_TOKEN: value })).toThrow(
+        /SESSION_MAX_PER_TOKEN/,
+      );
+    }
+  });
+
+  it("keeps the idle timeout and rotation under the ttl", () => {
+    expect(resolveSessionConfig({})).toEqual({
+      ttlSec: DEFAULT_SESSION_TTL_SEC,
+      maxPerToken: 5,
+      idleSec: DEFAULT_SESSION_IDLE_SEC,
+      rotateSec: DEFAULT_SESSION_ROTATE_SEC,
+    });
+    expect(DEFAULT_SESSION_IDLE_SEC).toBe(3600);
+    expect(DEFAULT_SESSION_ROTATE_SEC).toBe(900);
+    // A shorter ttl drags the defaults down instead of making them invalid.
+    const short = resolveSessionConfig({ SESSION_TTL_SEC: "120" });
+    expect([short.idleSec, short.rotateSec]).toEqual([120, 120]);
+    expect(() => resolveSessionConfig({ SESSION_TTL_SEC: "600", SESSION_IDLE_SEC: "601" })).toThrow(
+      /SESSION_IDLE_SEC/,
+    );
+    expect(() =>
+      resolveSessionConfig({ SESSION_TTL_SEC: "600", SESSION_ROTATE_SEC: "601" }),
+    ).toThrow(/SESSION_ROTATE_SEC/);
+  });
+
+  it("reads explicit idle and rotation windows", () => {
+    const config = resolveSessionConfig({ SESSION_IDLE_SEC: "900", SESSION_ROTATE_SEC: "300" });
+    expect([config.idleSec, config.rotateSec]).toEqual([900, 300]);
+  });
+});
+
+describe("resolveRateLimitConfig", () => {
+  it("falls back to the documented budgets", () => {
+    expect(resolveRateLimitConfig({})).toEqual({
+      perMin: 60,
+      burst: 20,
+      ipPerMin: 30,
+      ipBurst: 10,
+    });
+  });
+
+  it("reads overrides", () => {
+    expect(
+      resolveRateLimitConfig({
+        RATE_LIMIT_PER_MIN: "120",
+        RATE_LIMIT_BURST: "30",
+        RATE_LIMIT_IP_PER_MIN: "40",
+        RATE_LIMIT_IP_BURST: "5",
+      }),
+    ).toEqual({ perMin: 120, burst: 30, ipPerMin: 40, ipBurst: 5 });
+  });
+
+  it("rejects a burst larger than its per-minute budget", () => {
+    expect(() =>
+      resolveRateLimitConfig({ RATE_LIMIT_PER_MIN: "10", RATE_LIMIT_BURST: "11" }),
+    ).toThrow(/RATE_LIMIT_BURST/);
+    expect(() =>
+      resolveRateLimitConfig({ RATE_LIMIT_IP_PER_MIN: "10", RATE_LIMIT_IP_BURST: "11" }),
+    ).toThrow(/RATE_LIMIT_IP_BURST/);
+  });
+
+  it("rejects values that are not positive integers", () => {
+    for (const value of ["0", "-1", "1.5", "abc"]) {
+      expect(() => resolveRateLimitConfig({ RATE_LIMIT_PER_MIN: value })).toThrow(
+        /RATE_LIMIT_PER_MIN/,
+      );
+    }
+  });
+});
+
+describe("resolveCorsOrigins", () => {
+  it("is empty when unset", () => {
+    expect(resolveCorsOrigins({})).toEqual([]);
+    expect(resolveCorsOrigins({ CORS_ORIGINS: " , " })).toEqual([]);
+  });
+
+  it("keeps exact origins, trimmed", () => {
+    expect(
+      resolveCorsOrigins({ CORS_ORIGINS: " https://a.example ,http://localhost:5173" }),
+    ).toEqual(["https://a.example", "http://localhost:5173"]);
+  });
+
+  it("rejects a wildcard or a non-http origin", () => {
+    expect(() => resolveCorsOrigins({ CORS_ORIGINS: "*" })).toThrow(/CORS_ORIGINS/);
+    expect(() => resolveCorsOrigins({ CORS_ORIGINS: "ftp://a.example" })).toThrow(/CORS_ORIGINS/);
+    expect(() => resolveCorsOrigins({ CORS_ORIGINS: "a.example" })).toThrow(/CORS_ORIGINS/);
+  });
+});
+
+describe("resolvePort", () => {
+  it("defaults to 8787 and 8788", () => {
+    expect(resolvePort({})).toBe(8787);
+    expect(resolvePort({}, "VIEWER_PORT", 8788)).toBe(8788);
+    expect(resolvePort({ PORT: "9000" })).toBe(9000);
+  });
+
+  it("rejects values that are not usable ports", () => {
+    for (const value of ["0", "-1", "65536", "abc", "1.5"]) {
+      expect(() => resolvePort({ PORT: value })).toThrow(/PORT/);
+    }
+  });
+});
+
+describe("resolveViewerTailnetOnly", () => {
+  it("is off unless asked for", () => {
+    for (const value of [undefined, "", "false", "0"]) {
+      expect(resolveViewerTailnetOnly({ VIEWER_TAILNET_ONLY: value })).toBe(false);
+    }
+  });
+
+  it("turns on for the documented truthy values", () => {
+    for (const value of ["true", "1", " TRUE "]) {
+      expect(resolveViewerTailnetOnly({ VIEWER_TAILNET_ONLY: value })).toBe(true);
+    }
+  });
+
+  it("refuses an ambiguous value", () => {
+    expect(() => resolveViewerTailnetOnly({ VIEWER_TAILNET_ONLY: "yes" })).toThrow(
+      /VIEWER_TAILNET_ONLY/,
+    );
   });
 });

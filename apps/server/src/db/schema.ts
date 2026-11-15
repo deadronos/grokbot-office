@@ -148,6 +148,8 @@ export const sessions = sqliteTable(
       .notNull()
       .references(() => tokens.id),
     createdAt: text("created_at").notNull(),
+    // Last successful cookie-auth request. An idle session past `SESSION_IDLE_SEC` dies.
+    lastSeenAt: text("last_seen_at").notNull(),
     expiresAt: text("expires_at").notNull(),
     revokedAt: text("revoked_at"),
   },
