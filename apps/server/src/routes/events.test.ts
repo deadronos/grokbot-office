@@ -588,7 +588,23 @@ describe("GET /api/events", () => {
     expect(second).toMatchObject({ nextSince: 4, hasMore: false, lastSeq: 4 });
 
     const beyond = await (await getEvents(app, viewerToken, "?since=999")).json();
-    expect(beyond).toEqual({ events: [], nextSince: 999, hasMore: false, lastSeq: 4 });
+    // Clamped like the stream cursor: the client goes live at the high-water mark.
+    expect(beyond).toEqual({ events: [], nextSince: 4, hasMore: false, lastSeq: 4 });
+  });
+
+  it("clamps a `since` past the newest event to the high-water mark", async () => {
+    const { app, dataToken, viewerToken } = setup();
+    await post(
+      app,
+      dataToken,
+      batch(
+        ev(1, "status_changed", { status: "working" }),
+        ev(2, "status_changed", { status: "idle" }),
+      ),
+    );
+
+    const body = (await (await getEvents(app, viewerToken, "?since=99999")).json()) as EventsPage;
+    expect(body).toEqual({ events: [], nextSince: 2, hasMore: false, lastSeq: 2 });
   });
 
   describe("hidden bots", () => {

@@ -43,6 +43,13 @@
       "when": 1794736078086,
       "tag": "0005_label_handoff",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794737389874,
+      "tag": "0006_events_scrub_index",
+      "breakpoints": true
     }
   ]
 }

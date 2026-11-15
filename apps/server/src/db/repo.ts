@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
@@ -128,6 +129,17 @@ export interface Repo {
   deleteExpiredSessions(before: string): void;
   /** Highest `events.seq`, hidden bots included; 0 when empty. */
   lastEventSeq(): number;
+  /**
+   * Takes every bot whose heartbeat is older than `cutoff` offline in one transaction:
+   * `RELEASED_LINKS`, `since` = now, one `offline` event each, `lastHeartbeatAt` kept.
+   * Already-offline bots are left alone. Returns how many bots were swept (events added).
+   */
+  sweepStaleBots(cutoff: string, now: string): number;
+  /**
+   * Drops events older than `cutoff`, then closed handoffs aged past it that nothing
+   * still refers to (events first, then `bot_status`). Returns what was removed.
+   */
+  pruneRetention(cutoff: string): { events: number; handoffs: number };
 }
 
 export function createSqliteRepo(sqlite: Database.Database): Repo {
@@ -158,22 +170,33 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         .all()
         .map((row) => row.id),
     );
-    return statuses.map((s) => {
-      if (s.labelHandoffId === null || !hidden.has(s.labelHandoffId)) return s;
-      const own = reader
-        .select({ label: events.label })
+    // One lookup for every scrubbed bot instead of one accept lookup per bot.
+    const targets = statuses.filter(
+      (s) => s.labelHandoffId !== null && hidden.has(s.labelHandoffId),
+    );
+    const ownLabels = new Map<string, string | null>();
+    if (targets.length > 0) {
+      for (const row of reader
+        .select({ botId: events.botId, handoffId: events.handoffId, label: events.label })
         .from(events)
         .where(
           and(
-            eq(events.botId, s.botId),
+            inArray(events.botId, [...new Set(targets.map((s) => s.botId))]),
             eq(events.type, "handoff_accepted"),
-            eq(events.handoffId, s.labelHandoffId),
+            inArray(events.handoffId, [...new Set(targets.map((s) => s.labelHandoffId as string))]),
           ),
         )
         .orderBy(asc(events.seq))
-        .limit(1)
-        .get();
-      return { ...s, label: own?.label ?? null };
+        .all()) {
+        const key = `${row.botId}\u0000${row.handoffId}`;
+        if (!ownLabels.has(key)) ownLabels.set(key, row.label);
+      }
+    }
+    return statuses.map((s) => {
+      if (s.labelHandoffId === null || !hidden.has(s.labelHandoffId)) return s;
+      // One lookup covers every scrubbed bot: earliest accept label per (bot, handoff).
+      const key = `${s.botId}\u0000${s.labelHandoffId}`;
+      return { ...s, label: ownLabels.get(key) ?? null };
     });
   };
   /** Subquery of hidden bot ids, read live: un-hiding a bot shows its history again. */
@@ -567,5 +590,71 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       db.delete(sessions).where(lt(sessions.expiresAt, before)).run();
     },
     lastEventSeq: () => lastEventSeq(db),
+    sweepStaleBots: (cutoff, now) =>
+      db.transaction((tx) => {
+        const stale = tx
+          .select({ botId: botStatus.botId })
+          .from(botStatus)
+          .where(and(lt(botStatus.lastHeartbeatAt, cutoff), ne(botStatus.status, "offline")))
+          .all();
+        for (const { botId } of stale) {
+          const inserted = tx
+            .insert(events)
+            .values({
+              eventId: randomUUID(),
+              botId,
+              type: "offline",
+              status: "offline",
+              receivedAt: now,
+            })
+            .returning({ seq: events.seq })
+            .get();
+          tx.update(botStatus)
+            .set({
+              status: "offline",
+              ...RELEASED_LINKS,
+              since: now,
+              lastEventSeq: inserted?.seq ?? null,
+            })
+            .where(eq(botStatus.botId, botId))
+            .run();
+        }
+        return stale.length;
+      }),
+    pruneRetention: (cutoff) =>
+      db.transaction((tx) => {
+        const removedEvents = tx.delete(events).where(lt(events.receivedAt, cutoff)).run().changes;
+        const aged = tx
+          .select({ id: handoffs.id })
+          .from(handoffs)
+          .where(
+            and(
+              inArray(handoffs.state, ["accepted", "cancelled"]),
+              // Age a closed handoff from its accept, else from when it was sent.
+              lt(sql`coalesce(${handoffs.acceptedAt}, ${handoffs.sentAt})`, cutoff),
+            ),
+          )
+          .all();
+        let removedHandoffs = 0;
+        for (const { id } of aged) {
+          const referencedByEvent = tx
+            .select({ seq: events.seq })
+            .from(events)
+            .where(eq(events.handoffId, id))
+            .limit(1)
+            .get();
+          const referencedByStatus = tx
+            .select({ botId: botStatus.botId })
+            .from(botStatus)
+            .where(or(eq(botStatus.handoffId, id), eq(botStatus.labelHandoffId, id)))
+            .limit(1)
+            .get();
+          // A live bot's current links outrank the retention window.
+          if (referencedByEvent || referencedByStatus) continue;
+          tx.delete(handoffs).where(eq(handoffs.id, id)).run();
+          removedHandoffs++;
+        }
+        return { events: removedEvents, handoffs: removedHandoffs };
+      }),
   };
 }

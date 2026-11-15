@@ -105,6 +105,8 @@ export const events = sqliteTable(
     uniqueIndex("events_bot_id_event_id_unique").on(t.botId, t.eventId),
     index("events_received_at_idx").on(t.receivedAt),
     index("events_bot_id_seq_idx").on(t.botId, t.seq),
+    // The read-time label scrub (repo.scrubHiddenLabels) reads accepts per bot/handoff.
+    index("events_bot_id_type_handoff_id_idx").on(t.botId, t.type, t.handoffId),
     enumCheck("events_type_check", "type", EVENT_TYPES),
     enumCheck("events_status_check", "status", BOT_STATUSES, true),
     enumCheck("events_result_check", "result", TASK_RESULTS, true),

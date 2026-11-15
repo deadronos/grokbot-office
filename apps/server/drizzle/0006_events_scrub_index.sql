@@ -1,0 +1,1 @@
+CREATE INDEX `events_bot_id_type_handoff_id_idx` ON `events` (`bot_id`,`type`,`handoff_id`);
