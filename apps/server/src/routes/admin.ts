@@ -7,11 +7,13 @@ import type { AppEnv } from "../auth/middleware.ts";
 import { issueToken } from "../auth/tokens.ts";
 import type { Repo, Token } from "../db/repo.ts";
 
-const CreateTokenBody = z.object({
-  // `admin` is deliberately not issuable: admin access stays env-only.
-  kind: z.enum(["bot", "viewer"]),
-  botId: BotId.optional(),
-});
+const CreateTokenBody = z
+  .object({
+    // `admin` is deliberately not issuable: admin access stays env-only.
+    kind: z.enum(["bot", "viewer"]),
+    botId: BotId.optional(),
+  })
+  .strict();
 
 const PatchBotBody = z
   .object({

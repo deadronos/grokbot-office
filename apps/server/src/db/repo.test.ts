@@ -159,6 +159,59 @@ describe("SQLite repository", () => {
     expect(result.duplicate).toBe(false);
     expect(repo.listEventsSince(0)[0]?.clientAt).toBeNull();
   });
+  it("registers bots idempotently, keeping admin-owned fields", () => {
+    const { repo } = setup();
+    const later = "2026-02-01T00:00:00.000Z";
+    const profile = { id: "a", name: "A", role: "worker", avatar: "robot", pod: "dev" as const };
+    repo.registerBot(profile, now);
+    repo.updateBot("a", { deskIndex: 7, hidden: true });
+    repo.registerBot({ ...profile, name: "A II", pod: "ops" }, later);
+
+    expect(repo.getBot("a")).toEqual({
+      ...profile,
+      name: "A II",
+      pod: "ops",
+      deskIndex: 7,
+      hidden: true,
+      createdAt: now,
+      updatedAt: later,
+    });
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "idle",
+      since: now,
+      lastHeartbeatAt: later,
+    });
+  });
+  it("touches heartbeats, resetting since only when the status changes", () => {
+    const { repo } = setup();
+    repo.upsertBot(bot("a"));
+    const later = "2026-01-02T00:00:00.000Z";
+    const laterStill = "2026-01-03T00:00:00.000Z";
+
+    repo.touchHeartbeat("a", "working", now);
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "working",
+      since: now,
+      lastHeartbeatAt: now,
+    });
+
+    repo.touchHeartbeat("a", "working", later);
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "working",
+      since: now,
+      lastHeartbeatAt: later,
+    });
+
+    repo.touchHeartbeat("a", undefined, laterStill);
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "working", since: now });
+
+    repo.touchHeartbeat("a", "reviewing", laterStill);
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "reviewing",
+      since: laterStill,
+      lastHeartbeatAt: laterStill,
+    });
+  });
   it("opens file databases in WAL mode and re-applies migrations idempotently", () => {
     const dir = mkdtempSync(join(tmpdir(), "grokbot-office-db-"));
     try {

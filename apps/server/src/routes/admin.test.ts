@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { hashToken } from "../auth/tokens.ts";
-import { adminHeaders, botRecord, testSetup } from "../test-utils.ts";
+import { adminHeaders, botRecord, TEST_ADMIN_TOKEN, testSetup } from "../test-utils.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -39,6 +39,19 @@ describe("admin auth", () => {
     expect(
       (await app.request("/api/admin/tokens", { headers: adminHeaders("change-me") })).status,
     ).toBe(503);
+  });
+
+  it("refuses a short admin token as unconfigured", async () => {
+    const short = "x".repeat(31);
+    const { app } = setup({ adminToken: short });
+    expect((await app.request("/api/admin/tokens", { headers: adminHeaders(short) })).status).toBe(
+      503,
+    );
+  });
+
+  it("accepts a whitespace-padded admin token", async () => {
+    const { app } = setup({ adminToken: `  ${TEST_ADMIN_TOKEN}  ` });
+    expect((await app.request("/api/admin/tokens", { headers: adminHeaders() })).status).toBe(200);
   });
 
   it("rejects missing and wrong admin tokens", async () => {
@@ -131,6 +144,10 @@ describe("admin token endpoints", () => {
     expect((await createToken(app, { kind: "bot", botId: "Not A Slug" })).status).toBe(400);
     expect((await createToken(app, { kind: "viewer", botId: "data" })).status).toBe(400);
     expect((await createToken(app, { kind: "admin" })).status).toBe(400);
+    expect((await createToken(app, { kind: "viewer", extra: true })).status).toBe(400);
+    expect((await createToken(app, { kind: "bot", botId: "data", colour: "red" })).status).toBe(
+      400,
+    );
   });
 
   it("revokes tokens idempotently and 404s unknown ids", async () => {
