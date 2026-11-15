@@ -119,9 +119,9 @@ Heartbeat (keep-alive; the optional `status` is one of `idle`, `working`,
 `waiting`, `reviewing`, `offline`; an empty body is fine). A heartbeat is only a
 keep-alive: work state comes from events, so a live bot is never changed by it.
 The server sweeps stale heartbeats every 15 seconds. A bot whose last heartbeat is
-older than `timeoutSec` is marked `offline` (its work state is not), its task,
-label and handoff links are cleared, its `since` moves, and the server appends an
-`offline` event that viewers receive over SSE. A bot that is already offline is
+older than `timeoutSec` is marked `offline`, its task, label and handoff links are
+cleared, its `since` moves, and the server appends an `offline` event that viewers
+receive over SSE. A bot that is already offline is
 left alone, and so is a bot with no status row (not yet online).
 
 ```bash

@@ -55,7 +55,8 @@ export function resolveHeartbeatConfig(
 /**
  * Viewer session lifetime in seconds. Validated like the heartbeat values: a
  * malformed or out-of-range value stops the server at startup.
- */ export function resolveSessionTtlSec(
+ */
+export function resolveSessionTtlSec(
   env: Record<string, string | undefined> = process.env,
 ): number {
   const ttlSec = positiveInt(env.SESSION_TTL_SEC, DEFAULT_SESSION_TTL_SEC, "SESSION_TTL_SEC");
