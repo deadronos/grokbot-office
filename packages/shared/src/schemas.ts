@@ -54,24 +54,41 @@ export type Label = z.infer<typeof Label>;
 export const Ref = optionalText(REF_MAX);
 export type Ref = z.infer<typeof Ref>;
 
-export const TaskId = requiredText(REF_MAX);
+/**
+ * Ids are stored verbatim, so they are never cleaned up: any Cc/Cf character or
+ * leading/trailing whitespace is a 400 rather than a silent `task\u200B1` = `task1`.
+ */
+const REF_ID_PATTERN = /^(?!.*[\p{Cc}\p{Cf}])\S(?:[\s\S]*\S)?$/u;
+
+function refId(max: number) {
+  return z
+    .string()
+    .regex(REF_ID_PATTERN, "must be non-empty, unpadded, and free of control chars")
+    .max(max, `must be at most ${max} characters`);
+}
+
+export const TaskId = refId(REF_MAX);
 export type TaskId = z.infer<typeof TaskId>;
 
-export const HandoffId = requiredText(REF_MAX);
+export const HandoffId = refId(REF_MAX);
 export type HandoffId = z.infer<typeof HandoffId>;
 
-export const RegisterBody = z.object({
-  id: BotId,
-  name: requiredText(40),
-  role: requiredText(60),
-  avatar: requiredText(60),
-  pod: podSchema,
-});
+export const RegisterBody = z
+  .object({
+    id: BotId,
+    name: requiredText(40),
+    role: requiredText(60),
+    avatar: requiredText(60),
+    pod: podSchema,
+  })
+  .strict();
 export type RegisterBody = z.infer<typeof RegisterBody>;
 
-export const HeartbeatBody = z.object({
-  status: botStatusSchema.optional(),
-});
+export const HeartbeatBody = z
+  .object({
+    status: botStatusSchema.optional(),
+  })
+  .strict();
 export type HeartbeatBody = z.infer<typeof HeartbeatBody>;
 
 const eventFields = {
@@ -83,25 +100,29 @@ const eventFields = {
   taskId: TaskId.optional(),
 };
 
-/** A client-submitted event; server-only types are rejected. */
+/** A client-submitted event; server-only types and unknown keys are rejected. */
 export const EventIn = z.discriminatedUnion("type", [
-  z.object({ ...eventFields, type: z.literal("status_changed"), status: botStatusSchema }),
-  z.object({ ...eventFields, type: z.literal("task_started") }),
-  z.object({ ...eventFields, type: z.literal("task_finished"), result: taskResultSchema }),
-  z.object({ ...eventFields, type: z.literal("handoff_sent"), to: BotId, handoffId: HandoffId }),
-  z.object({ ...eventFields, type: z.literal("handoff_accepted"), handoffId: HandoffId }),
+  z.object({ ...eventFields, type: z.literal("status_changed"), status: botStatusSchema }).strict(),
+  z.object({ ...eventFields, type: z.literal("task_started") }).strict(),
+  z.object({ ...eventFields, type: z.literal("task_finished"), result: taskResultSchema }).strict(),
+  z
+    .object({ ...eventFields, type: z.literal("handoff_sent"), to: BotId, handoffId: HandoffId })
+    .strict(),
+  z.object({ ...eventFields, type: z.literal("handoff_accepted"), handoffId: HandoffId }).strict(),
 ]);
 export type EventIn = z.infer<typeof EventIn>;
 
 export const EVENTS_BATCH_MIN = 1;
 export const EVENTS_BATCH_MAX = 20;
 
-export const EventsBatch = z.object({
-  events: z
-    .array(EventIn)
-    .min(EVENTS_BATCH_MIN, `at least ${EVENTS_BATCH_MIN} event`)
-    .max(EVENTS_BATCH_MAX, `at most ${EVENTS_BATCH_MAX} events`),
-});
+export const EventsBatch = z
+  .object({
+    events: z
+      .array(EventIn)
+      .min(EVENTS_BATCH_MIN, `at least ${EVENTS_BATCH_MIN} event`)
+      .max(EVENTS_BATCH_MAX, `at most ${EVENTS_BATCH_MAX} events`),
+  })
+  .strict();
 export type EventsBatch = z.infer<typeof EventsBatch>;
 
 export const DeskSchema = z.object({
