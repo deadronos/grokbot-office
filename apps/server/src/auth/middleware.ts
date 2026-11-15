@@ -20,14 +20,18 @@ export function requireAdmin({ adminToken }: { adminToken: string | undefined })
     if (!header) return c.json({ error: "missing bearer token" }, 401);
     const token = extractBearerToken(header);
     if (!token) return c.json({ error: "malformed authorization header" }, 401);
-    if (!secretsEqual(token, adminToken)) return c.json({ error: "invalid token" }, 401);
+    // Whitespace around a pasted token is a copy/paste artefact, not a different secret.
+    if (!secretsEqual(token, adminToken.trim())) return c.json({ error: "invalid token" }, 401);
     await next();
   });
 }
 
 /**
- * Bearer-token auth for later bot/viewer routes. `botIdParam` names the route
- * param holding the bot slug and requires the token to be bound to that bot.
+ * Bearer-token auth for bot/viewer routes. `botIdParam` names the route param
+ * holding the bot slug and requires the token to be bound to that bot.
+ *
+ * Every failure answers the same generic 401/403 body so a caller cannot probe
+ * which check failed; the specific reason goes to one server-side log line.
  */
 export function requireToken({
   repo,
@@ -40,16 +44,24 @@ export function requireToken({
 }) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const header = c.req.header("authorization");
-    if (!header) return c.json({ error: "missing bearer token" }, 401);
     const plaintext = extractBearerToken(header);
-    if (!plaintext) return c.json({ error: "malformed authorization header" }, 401);
-    const token = repo.findTokenByHash(hashToken(plaintext));
-    if (!token) return c.json({ error: "invalid token" }, 401);
-    if (token.revokedAt) return c.json({ error: "token revoked" }, 401);
-    if (token.kind !== kind) return c.json({ error: "wrong token kind" }, 403);
-    if (kind === "bot" && botIdParam && (!token.botId || token.botId !== c.req.param(botIdParam))) {
-      return c.json({ error: "token is not valid for this bot" }, 403);
+    const token = plaintext === undefined ? undefined : repo.findTokenByHash(hashToken(plaintext));
+
+    // Never log the token, its prefix/hash, or the Authorization header.
+    const reject = (status: 401 | 403, reason: string) => {
+      console.warn("auth: token rejected", { reason, tokenId: token?.id });
+      return c.json({ error: status === 401 ? "unauthorized" : "forbidden" }, status);
+    };
+
+    if (!header) return reject(401, "missing header");
+    if (!plaintext) return reject(401, "malformed header");
+    if (!token) return reject(401, "unknown token");
+    if (token.revokedAt) return reject(401, "revoked token");
+    if (token.kind !== kind) return reject(403, "wrong token kind");
+    if (kind === "bot" && botIdParam && token.botId !== c.req.param(botIdParam)) {
+      return reject(403, "token bound to another bot");
     }
+
     repo.touchToken(token.id, new Date().toISOString());
     c.set("token", token);
     await next();

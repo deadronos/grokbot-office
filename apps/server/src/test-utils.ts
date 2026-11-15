@@ -1,9 +1,10 @@
 import { createApp } from "./app.ts";
+import { type HeartbeatConfig, resolveHeartbeatConfig } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
 
 /** Obviously fake admin token; real ones never live in the repo. */
-export const TEST_ADMIN_TOKEN = "test-admin-token-0000";
+export const TEST_ADMIN_TOKEN = "test-admin-token-not-a-real-secret-0000";
 
 export const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -20,10 +21,13 @@ export const botRecord = (id: string) => ({
 });
 
 /** In-memory app + repo for route and middleware tests. */
-export function testSetup({ adminToken = TEST_ADMIN_TOKEN }: { adminToken?: string } = {}) {
+export function testSetup({
+  adminToken = TEST_ADMIN_TOKEN,
+  heartbeat = resolveHeartbeatConfig({}),
+}: { adminToken?: string; heartbeat?: HeartbeatConfig } = {}) {
   const db = openDatabase(":memory:");
   const repo = createSqliteRepo(db);
-  const app = createApp({ repo, adminToken });
+  const app = createApp({ repo, adminToken, heartbeat });
   return { db, repo, app, close: () => db.close() };
 }
 
