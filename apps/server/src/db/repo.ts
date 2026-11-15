@@ -1,11 +1,11 @@
 import type Database from "better-sqlite3";
-import { and, asc, desc, eq, gt, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
 
 import { toUtc } from "../time.ts";
-import { botStatus, bots, events, handoffs, tokens } from "./schema.ts";
+import { botStatus, bots, events, handoffs, sessions, tokens } from "./schema.ts";
 
 export type Bot = typeof bots.$inferSelect;
 type BotPatch = Partial<Omit<Bot, "id" | "createdAt">>;
@@ -14,6 +14,7 @@ export type Event = typeof events.$inferSelect;
 type NewEvent = typeof events.$inferInsert;
 export type Handoff = typeof handoffs.$inferSelect;
 export type Token = typeof tokens.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
 
 /** One consistent read of everything the viewer snapshot needs. */
 export interface SnapshotRows {
@@ -45,7 +46,13 @@ const RESTING_STATUSES: readonly Status["status"][] = ["idle", "offline"];
 const DERIVED_STATUSES: readonly Status["status"][] = ["working", "waiting"];
 
 /** Fields cleared whenever a bot comes to rest, so an idle bot never holds a task. */
-const RELEASED_LINKS = { taskId: null, label: null, handoffTo: null, handoffId: null } as const;
+const RELEASED_LINKS = {
+  taskId: null,
+  label: null,
+  labelHandoffId: null,
+  handoffTo: null,
+  handoffId: null,
+} as const;
 
 /**
  * The status a heartbeat leaves behind. A heartbeat is a keep-alive, not a task event:
@@ -113,6 +120,14 @@ export interface Repo {
   listTokens(): Token[];
   touchToken(id: string, lastUsedAt: string): void;
   revokeToken(id: string, revokedAt: string): void;
+  insertSession(session: Session): void;
+  findSessionByHash(hash: string): Session | undefined;
+  /** Revocation is idempotent: the first timestamp wins. */
+  revokeSession(id: string, revokedAt: string): void;
+  /** Lazy cleanup: drops sessions that expired before `before`. */
+  deleteExpiredSessions(before: string): void;
+  /** Highest `events.seq`, hidden bots included; 0 when empty. */
+  lastEventSeq(): number;
 }
 
 export function createSqliteRepo(sqlite: Database.Database): Repo {
@@ -123,6 +138,44 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
   const lastEventSeq = (reader: Reader): number =>
     reader.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()?.seq ??
     0;
+  /**
+   * Read-time label scrub: a label taken from a handoff whose sender is hidden *now* is
+   * replaced by the receiver's own accept label (or none). Hidden before or after the
+   * accept, same result, and un-hiding the sender restores the label.
+   */
+  const scrubHiddenLabels = (reader: Reader, statuses: Status[]): Status[] => {
+    const sourced = [
+      ...new Set(statuses.flatMap((s) => (s.labelHandoffId === null ? [] : [s.labelHandoffId]))),
+    ];
+    if (sourced.length === 0) return statuses;
+    const hidden = new Set(
+      reader
+        .select({ id: handoffs.id })
+        .from(handoffs)
+        .where(
+          and(inArray(handoffs.id, sourced), inArray(handoffs.fromBotId, hiddenBotIds(reader))),
+        )
+        .all()
+        .map((row) => row.id),
+    );
+    return statuses.map((s) => {
+      if (s.labelHandoffId === null || !hidden.has(s.labelHandoffId)) return s;
+      const own = reader
+        .select({ label: events.label })
+        .from(events)
+        .where(
+          and(
+            eq(events.botId, s.botId),
+            eq(events.type, "handoff_accepted"),
+            eq(events.handoffId, s.labelHandoffId),
+          ),
+        )
+        .orderBy(asc(events.seq))
+        .limit(1)
+        .get();
+      return { ...s, label: own?.label ?? null };
+    });
+  };
   /** Subquery of hidden bot ids, read live: un-hiding a bot shows its history again. */
   const hiddenBotIds = (reader: Reader) =>
     reader.select({ id: bots.id }).from(bots).where(eq(bots.hidden, true));
@@ -209,20 +262,42 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     getEventsPage: (seq, limit) =>
       db.transaction((tx) => {
         const hiddenIds = hiddenBotIds(tx);
+        const rows = tx
+          .select()
+          .from(events)
+          .where(
+            and(
+              gt(events.seq, seq),
+              notInArray(events.botId, hiddenIds),
+              or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
+            ),
+          )
+          .orderBy(events.seq)
+          .limit(limit + 1)
+          .all();
+        // A handoff id names the hidden sender's handoff, so scrub it at read time:
+        // un-hiding the sender brings it back, and the stored row stays untouched.
+        const pageHandoffIds = [
+          ...new Set(rows.flatMap((row) => (row.handoffId === null ? [] : [row.handoffId]))),
+        ];
+        const hiddenHandoffIds = new Set(
+          pageHandoffIds.length === 0
+            ? []
+            : tx
+                .select({ id: handoffs.id })
+                .from(handoffs)
+                .where(
+                  and(inArray(handoffs.id, pageHandoffIds), inArray(handoffs.fromBotId, hiddenIds)),
+                )
+                .all()
+                .map((handoff) => handoff.id),
+        );
         return {
-          rows: tx
-            .select()
-            .from(events)
-            .where(
-              and(
-                gt(events.seq, seq),
-                notInArray(events.botId, hiddenIds),
-                or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
-              ),
-            )
-            .orderBy(events.seq)
-            .limit(limit + 1)
-            .all(),
+          rows: rows.map((row) =>
+            row.handoffId !== null && hiddenHandoffIds.has(row.handoffId)
+              ? { ...row, handoffId: null }
+              : row,
+          ),
           lastSeq: lastEventSeq(tx),
         };
       }),
@@ -235,7 +310,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           // Layout order is applied by the route; the DB only gives a stable base order.
           .orderBy(asc(bots.id))
           .all(),
-        statuses: tx.select().from(botStatus).all(),
+        statuses: scrubHiddenLabels(tx, tx.select().from(botStatus).all()),
         // A handoff from or to a hidden bot stays out, like the bot itself.
         openHandoffs: tx
           .select()
@@ -270,9 +345,13 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         const change = (patch: Partial<Status>) => {
           const next = patch.status ?? status.status;
           const released = RESTING_STATUSES.includes(next) ? RELEASED_LINKS : {};
+          // A new label has a new source: only an accept names a handoff for it.
+          const source =
+            "label" in patch && !("labelHandoffId" in patch) ? { labelHandoffId: null } : {};
           status = {
             ...status,
             ...released,
+            ...source,
             ...patch,
             status: next,
             since: next === status.status ? status.since : now,
@@ -373,6 +452,9 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   // The receiver now works on the handed-off task, not whatever it had before.
                   taskId: input.taskId ?? null,
                   label: handoff.label ?? input.label ?? null,
+                  // Remember where the label came from: while the sender is hidden, viewers
+                  // see the accept event's own label instead (read time, see getSnapshot).
+                  labelHandoffId: handoff.label === null ? null : handoff.id,
                   handoffTo: null,
                   handoffId: null,
                 });
@@ -426,6 +508,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .set({
             status: status.status,
             label: status.label,
+            labelHandoffId: status.labelHandoffId,
             taskId: status.taskId,
             handoffTo: status.handoffTo,
             handoffId: status.handoffId,
@@ -468,5 +551,21 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         .where(and(eq(tokens.id, id), isNull(tokens.revokedAt)))
         .run();
     },
+    insertSession: (session) => {
+      db.insert(sessions).values(session).run();
+    },
+    findSessionByHash: (hash) =>
+      db.select().from(sessions).where(eq(sessions.tokenHash, hash)).get(),
+    revokeSession: (id, revokedAt) => {
+      // `expires_at` is the stored ISO text, so time order is text order.
+      db.update(sessions)
+        .set({ revokedAt })
+        .where(and(eq(sessions.id, id), isNull(sessions.revokedAt)))
+        .run();
+    },
+    deleteExpiredSessions: (before) => {
+      db.delete(sessions).where(lt(sessions.expiresAt, before)).run();
+    },
+    lastEventSeq: () => lastEventSeq(db),
   };
 }

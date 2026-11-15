@@ -10,7 +10,10 @@ import type { Repo } from "./db/repo.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { botRoutes } from "./routes/bots.ts";
 import { eventRoutes } from "./routes/events.ts";
+import { sessionRoutes } from "./routes/session.ts";
 import { stateRoutes } from "./routes/state.ts";
+import { DEFAULT_STREAM_CONFIG, type StreamConfig, streamRoutes } from "./routes/stream.ts";
+import type { StreamHub } from "./stream/hub.ts";
 
 export const SERVICE_NAME = "grokbot-office-server";
 
@@ -20,16 +23,23 @@ export const MAX_API_BODY_BYTES = 16 * 1024;
 /**
  * Builds the app from its dependencies so tests can hand in an in-memory repo.
  * `adminToken` is the env `ADMIN_TOKEN`; when it is unset or the placeholder the
- * admin API answers 503.
+ * admin API answers 503. `hub` is the in-process SSE fan-out (index.ts owns one;
+ * tests create their own). `stream` shortens the ping interval and client cap in tests.
  */
 export function createApp({
   repo,
   adminToken,
   heartbeat,
+  hub,
+  sessionTtlSec,
+  stream = DEFAULT_STREAM_CONFIG,
 }: {
   repo: Repo;
   adminToken: string | undefined;
   heartbeat: HeartbeatConfig;
+  hub: StreamHub;
+  sessionTtlSec: number;
+  stream?: StreamConfig;
 }): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
@@ -47,8 +57,10 @@ export function createApp({
   app.use("/api/admin/*", requireAdmin({ adminToken }));
   app.route("/api/admin", adminRoutes(repo));
   app.route("/api/bots", botRoutes(repo, heartbeat));
-  app.route("/api/events", eventRoutes({ repo, adminToken }));
+  app.route("/api/events", eventRoutes({ repo, adminToken, hub }));
   app.route("/api/state", stateRoutes({ repo, adminToken }));
+  app.route("/api/session", sessionRoutes({ repo, adminToken, sessionTtlSec }));
+  app.route("/api/stream", streamRoutes({ repo, adminToken, hub, config: stream }));
 
   return app;
 }

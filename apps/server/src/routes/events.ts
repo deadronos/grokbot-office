@@ -7,6 +7,7 @@ import { EventsBatch } from "@grokbot-office/shared";
 import type { AppEnv } from "../auth/middleware.ts";
 import { requireToken, requireViewer } from "../auth/middleware.ts";
 import { InvalidEventError, type Repo } from "../db/repo.ts";
+import type { StreamHub } from "../stream/hub.ts";
 import { nowUtc } from "../time.ts";
 import { toStreamEvent } from "./mappers.ts";
 
@@ -52,8 +53,17 @@ function parseEventsQuery(c: Context<AppEnv>): { since: number; limit: number } 
  * another bot is refused whole; schema errors never echo the input back.
  *
  * `GET` is the viewer's paged replay of the same log, behind its own auth.
+ * A committed batch wakes the SSE clients through `hub`.
  */
-export function eventRoutes({ repo, adminToken }: { repo: Repo; adminToken: string | undefined }) {
+export function eventRoutes({
+  repo,
+  adminToken,
+  hub,
+}: {
+  repo: Repo;
+  adminToken: string | undefined;
+  hub: StreamHub;
+}) {
   const api = new Hono<AppEnv>();
 
   api.get("/", requireViewer({ repo, adminToken }), (c) => {
@@ -94,7 +104,10 @@ export function eventRoutes({ repo, adminToken }: { repo: Repo; adminToken: stri
 
     const now = nowUtc();
     try {
-      return c.json(repo.applyEvents(botId, parsed.data.events, now));
+      const result = repo.applyEvents(botId, parsed.data.events, now);
+      // Only a commit with at least one new event gives a stream something to send.
+      if (result.accepted > 0) hub.notify();
+      return c.json(result);
     } catch (error) {
       if (!(error instanceof InvalidEventError)) throw error;
       return c.json({ error: "invalid event", index: error.index }, 422);
