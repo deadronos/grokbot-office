@@ -6,15 +6,16 @@ packet flying from desk to desk. Bots report in opt-in over small HTTPS calls
 (register, heartbeat, events); the browser receives live updates over SSE.
 
 This repository currently contains workspace tooling, CI, the API server and the
-web app. The web app renders the static office scene: nine fixed desks in the
-shared layout, a placeholder low-poly bot per desk and name plates. Live status,
-the HUD and handoff animation come in later issues.
+web app. The web app signs a viewer in, keeps a zustand store in sync with the
+server (`GET /api/state` plus the SSE stream) and renders the static office scene:
+nine fixed desks, a placeholder low-poly bot per desk and name plates. Live status
+visuals, the HUD list/feed and handoff animation come in later issues.
 
 ## Stack
 
 - **Runtime:** Node.js 24, TypeScript (strict)
 - **Server:** [Hono](https://hono.dev) on `@hono/node-server`
-- **Web:** React 19 + Vite + React Three Fiber (three.js) + drei
+- **Web:** React 19 + Vite + React Three Fiber (three.js) + drei + zustand
 - **Shared:** `@grokbot-office/shared` – constants and types used by both apps
 - **Tooling:** pnpm workspaces, oxlint, oxfmt, Vitest, GitHub Actions
 
@@ -42,6 +43,56 @@ pnpm dev               # server on http://127.0.0.1:8787, web on http://127.0.0.
 
 The Vite dev server proxies `/api` to the server, so `http://127.0.0.1:5173/api/health`
 works from the browser.
+
+Sign in at that Vite origin (`http://127.0.0.1:5173`), not by opening the API port in
+the browser. Chrome treats loopback HTTP as a secure context, so it stores the
+`__Secure-bo_session` cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/api`)
+on `http://127.0.0.1:5173` and on `http://localhost:5173`. There is no separate
+dev-TLS setup. The dev server listens on `127.0.0.1` only, so `http://[::1]:5173`
+will not connect.
+
+## Web app (viewer)
+
+The web app is private too. On first load it calls `GET /api/state` with
+`credentials: "same-origin"`: a `401` shows the viewer sign-in form, a success means
+the HttpOnly session cookie is still good so the office scene renders and
+`GET /api/stream` opens.
+
+Sign in pastes a viewer token once (`pnpm admin token create --kind viewer`). The
+browser sends it as `Authorization: Bearer` to `POST /api/session`; success is `201`
+with `{ "expiresAt": <ISO datetime> }` (the client ignores it) and the cookie
+`__Secure-bo_session=<secret>; HttpOnly; Secure; SameSite=Strict; Path=/api;
+Max-Age=<ttl>`, set by the server and never read or written by the client. Anything
+else is a failure: `401` for a missing, unknown or revoked token, `403` for a bot
+or admin token (the form says so), and any other status is reported generically.
+The token is dropped right after the submit and is never written to `localStorage`,
+`sessionStorage`, `document.cookie` or the URL. After that every call uses the cookie
+through `credentials: "same-origin"` (the stream uses `withCredentials`), never the
+bearer header and never a `?token=`/`?session=` query. `POST /api/session/logout`
+always answers `204` (no auth, idempotent) and returns to the login form.
+
+On first open the stream URL is `/api/stream?since=<lastEventSeq>` (canonical digits,
+so events between the snapshot and the first frame are not lost). The URL is left
+alone afterwards: when the browser reconnects `EventSource` sends `Last-Event-ID`
+from the last frame it saw, and the server prefers that header over `?since=`.
+
+The zustand store holds the snapshot, applies stream events immutably (skipping
+`seq <= lastEventSeq` so a reconnect replay is idempotent), exposes a per-bot selector
+so one desk can re-render on its own, and calls `invalidateScene()` so the on-demand
+Canvas redraws. A `bot_registered` event for a bot that was not in the snapshot
+refetches `GET /api/state`, because the frame does not carry name, role, avatar or pod.
+A `status_changed` event without a `label` keeps the current one (the server omits a
+null label on the wire, so an explicit clear never arrives). Top right: a sign-out
+button, plus the connection indicator:
+
+- `live` – the stream is open and event frames or 25 s `ping` frames (`data: {}`) arrive
+- `reconnecting` – the stream errored; the browser's `EventSource` retries and resumes
+  with `Last-Event-ID`. An expired or revoked session ends the open stream at the next
+  ping, so each error also probes `GET /api/state`: a `401` there means the cookie is
+  gone, the stream is closed and the viewer goes back to the login form
+- `office closed` – nothing arrived for 45 s while reconnecting, or the first
+  `GET /api/state` could not be reached (Mac asleep, server down); a probe that cannot
+  reach the server keeps this timer running
 
 ## Scripts
 

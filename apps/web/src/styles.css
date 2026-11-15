@@ -50,3 +50,140 @@ canvas {
   margin: 0;
   color: #8b93a1;
 }
+
+.session-bar {
+  position: fixed;
+  top: 1rem;
+  right: 1.25rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.connection {
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.logout-button {
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #8b93a1;
+  border-radius: 999px;
+  background: transparent;
+  color: #f4f6fb;
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.logout-button:hover,
+.logout-button:focus-visible {
+  opacity: 1;
+  outline: 2px solid #f4f6fb;
+  outline-offset: 2px;
+}
+
+.connection-live {
+  color: #5ad19a;
+}
+
+.connection-reconnecting {
+  color: #e0b95c;
+}
+
+.connection-closed {
+  color: #e0776c;
+}
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(10 13 19 / 55%);
+  backdrop-filter: blur(2px);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(22rem, 100%);
+  padding: 1.5rem;
+  border: 1px solid #39414f;
+  border-radius: 0.75rem;
+  background: #1b2029;
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 35%);
+}
+
+.login-title {
+  margin: 0;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+}
+
+.login-hint {
+  margin: 0 0 0.4rem;
+  color: #8b93a1;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.login-label {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #aab2c0;
+}
+
+.login-input {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #39414f;
+  border-radius: 0.4rem;
+  background: #141821;
+  color: #f4f6fb;
+  font: inherit;
+}
+
+.login-input:focus-visible,
+.login-submit:focus-visible {
+  outline: 2px solid #7f9cf5;
+  outline-offset: 2px;
+}
+
+.login-submit {
+  margin-top: 0.4rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #7f9cf5;
+  border-radius: 0.4rem;
+  background: #7f9cf5;
+  color: #141821;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-error {
+  margin: 0;
+  color: #e0776c;
+  font-size: 0.85rem;
+}
