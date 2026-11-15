@@ -68,6 +68,9 @@ export const botStatus = sqliteTable(
     handoffTo: text("handoff_to").references(() => bots.id),
     // The handoff a `waiting` bot is waiting on; only its acceptance releases the bot.
     handoffId: text("handoff_id").references(() => handoffs.id),
+    // The accepted handoff whose label `label` came from; viewers lose that label while
+    // the handoff's sender is hidden (read time). Cleared whenever the label changes.
+    labelHandoffId: text("label_handoff_id").references(() => handoffs.id),
     since: text("since").notNull(),
     lastHeartbeatAt: text("last_heartbeat_at").notNull(),
     lastEventSeq: integer("last_event_seq"),

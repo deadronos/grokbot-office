@@ -46,7 +46,13 @@ const RESTING_STATUSES: readonly Status["status"][] = ["idle", "offline"];
 const DERIVED_STATUSES: readonly Status["status"][] = ["working", "waiting"];
 
 /** Fields cleared whenever a bot comes to rest, so an idle bot never holds a task. */
-const RELEASED_LINKS = { taskId: null, label: null, handoffTo: null, handoffId: null } as const;
+const RELEASED_LINKS = {
+  taskId: null,
+  label: null,
+  labelHandoffId: null,
+  handoffTo: null,
+  handoffId: null,
+} as const;
 
 /**
  * The status a heartbeat leaves behind. A heartbeat is a keep-alive, not a task event:
@@ -132,6 +138,44 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
   const lastEventSeq = (reader: Reader): number =>
     reader.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()?.seq ??
     0;
+  /**
+   * Read-time label scrub: a label taken from a handoff whose sender is hidden *now* is
+   * replaced by the receiver's own accept label (or none). Hidden before or after the
+   * accept, same result, and un-hiding the sender restores the label.
+   */
+  const scrubHiddenLabels = (reader: Reader, statuses: Status[]): Status[] => {
+    const sourced = [
+      ...new Set(statuses.flatMap((s) => (s.labelHandoffId === null ? [] : [s.labelHandoffId]))),
+    ];
+    if (sourced.length === 0) return statuses;
+    const hidden = new Set(
+      reader
+        .select({ id: handoffs.id })
+        .from(handoffs)
+        .where(
+          and(inArray(handoffs.id, sourced), inArray(handoffs.fromBotId, hiddenBotIds(reader))),
+        )
+        .all()
+        .map((row) => row.id),
+    );
+    return statuses.map((s) => {
+      if (s.labelHandoffId === null || !hidden.has(s.labelHandoffId)) return s;
+      const own = reader
+        .select({ label: events.label })
+        .from(events)
+        .where(
+          and(
+            eq(events.botId, s.botId),
+            eq(events.type, "handoff_accepted"),
+            eq(events.handoffId, s.labelHandoffId),
+          ),
+        )
+        .orderBy(asc(events.seq))
+        .limit(1)
+        .get();
+      return { ...s, label: own?.label ?? null };
+    });
+  };
   /** Subquery of hidden bot ids, read live: un-hiding a bot shows its history again. */
   const hiddenBotIds = (reader: Reader) =>
     reader.select({ id: bots.id }).from(bots).where(eq(bots.hidden, true));
@@ -266,7 +310,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           // Layout order is applied by the route; the DB only gives a stable base order.
           .orderBy(asc(bots.id))
           .all(),
-        statuses: tx.select().from(botStatus).all(),
+        statuses: scrubHiddenLabels(tx, tx.select().from(botStatus).all()),
         // A handoff from or to a hidden bot stays out, like the bot itself.
         openHandoffs: tx
           .select()
@@ -301,9 +345,13 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         const change = (patch: Partial<Status>) => {
           const next = patch.status ?? status.status;
           const released = RESTING_STATUSES.includes(next) ? RELEASED_LINKS : {};
+          // A new label has a new source: only an accept names a handoff for it.
+          const source =
+            "label" in patch && !("labelHandoffId" in patch) ? { labelHandoffId: null } : {};
           status = {
             ...status,
             ...released,
+            ...source,
             ...patch,
             status: next,
             since: next === status.status ? status.since : now,
@@ -399,22 +447,14 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   .set({ state: "accepted", acceptedAt: now })
                   .where(eq(handoffs.id, handoff.id))
                   .run();
-                const fromHidden = tx
-                  .select({ hidden: bots.hidden })
-                  .from(bots)
-                  .where(eq(bots.id, handoff.fromBotId))
-                  .get();
                 change({
                   status: "working",
                   // The receiver now works on the handed-off task, not whatever it had before.
                   taskId: input.taskId ?? null,
-                  // A hidden sender's handoff label never reaches viewers: the receiver shows
-                  // its own label or none, never a placeholder. Status is current state, so
-                  // un-hiding the sender later does not restore the old label.
-                  label:
-                    fromHidden?.hidden === true
-                      ? (input.label ?? null)
-                      : (handoff.label ?? input.label ?? null),
+                  label: handoff.label ?? input.label ?? null,
+                  // Remember where the label came from: while the sender is hidden, viewers
+                  // see the accept event's own label instead (read time, see getSnapshot).
+                  labelHandoffId: handoff.label === null ? null : handoff.id,
                   handoffTo: null,
                   handoffId: null,
                 });
@@ -468,6 +508,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .set({
             status: status.status,
             label: status.label,
+            labelHandoffId: status.labelHandoffId,
             taskId: status.taskId,
             handoffTo: status.handoffTo,
             handoffId: status.handoffId,

@@ -45,5 +45,12 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
       db.close();
       process.exit(0);
     });
+    // `close` only drops connections that are idle right now; ended streams and other
+    // keep-alive clients go idle a moment later, so sweep again instead of waiting for
+    // the keep-alive timeout.
+    if ("closeIdleConnections" in server) {
+      const sweep = setInterval(() => server.closeIdleConnections(), 50);
+      sweep.unref();
+    }
   });
 }

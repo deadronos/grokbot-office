@@ -59,7 +59,13 @@ export function testSetup({
 
 export const adminHeaders = (token = TEST_ADMIN_TOKEN) => ({ authorization: `Bearer ${token}` });
 
-export type SseFrame = { event: string; data: string; id?: string };
+export type SseFrame = {
+  event: string;
+  data: string;
+  id?: string;
+  retry?: string;
+  comment?: string;
+};
 
 /** Reads SSE frames out of a streaming Response (the `/api/stream` tests). */
 export class Sse {
@@ -72,7 +78,16 @@ export class Sse {
     this.reader = res.body.getReader();
   }
 
+  /** The next frame with an event or data; comment/`retry:`-only frames are skipped. */
   async next(): Promise<SseFrame> {
+    for (;;) {
+      const frame = await this.nextRaw();
+      if (frame.event !== "" || frame.data !== "" || frame.id !== undefined) return frame;
+    }
+  }
+
+  /** The next frame as sent, including the opening `retry:` + comment frame. */
+  async nextRaw(): Promise<SseFrame> {
     for (;;) {
       const end = this.buffer.indexOf("\n\n");
       if (end !== -1) {
@@ -82,11 +97,16 @@ export class Sse {
         for (const line of block.split("\n")) {
           const colon = line.indexOf(":");
           if (colon === -1) continue;
+          if (colon === 0) {
+            frame.comment = line.slice(1).replace(/^ /, "");
+            continue;
+          }
           const field = line.slice(0, colon);
           const value = line.slice(colon + 1).replace(/^ /, "");
           if (field === "event") frame.event = value;
           if (field === "data") frame.data = frame.data === "" ? value : `${frame.data}\n${value}`;
           if (field === "id") frame.id = value;
+          if (field === "retry") frame.retry = value;
         }
         return frame;
       }

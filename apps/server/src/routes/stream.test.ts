@@ -141,6 +141,68 @@ describe("GET /api/stream frames", () => {
   });
 });
 
+describe("GET /api/stream opening", () => {
+  it("writes a retry + comment frame first, so EventSource opens at once", async () => {
+    const { app, viewerToken } = setup();
+    const res = await open(app, auth(viewerToken));
+    expect(res.headers.get("connection")).toBe("close");
+    const sse = new Sse(res);
+    // Nothing to replay: the opening frame still arrives without waiting for an event.
+    expect(await sse.nextRaw()).toEqual({ event: "", data: "", retry: "3000", comment: "open" });
+    await sse.cancel();
+  });
+});
+
+describe("GET /api/stream cursor beyond the newest event", () => {
+  for (const [name, path, headers] of [
+    ["Last-Event-ID", "/api/stream", { "last-event-id": "999" }],
+    ["?since", "/api/stream?since=999", {}],
+  ] as const) {
+    it(`clamps ${name} to the newest event and goes live (e.g. after a DB reset)`, async () => {
+      const { app, viewerToken, dataToken } = setup();
+      await post(app, dataToken, [
+        { botId: "data", eventId: ulid(1), type: "status_changed", status: "working" },
+      ]);
+      const sse = new Sse(await open(app, { ...auth(viewerToken), ...headers }, path));
+      await post(app, dataToken, [
+        { botId: "data", eventId: ulid(2), type: "status_changed", status: "idle" },
+      ]);
+      // Without the clamp the cursor would stay at 999 and seq 2 would never arrive.
+      expect((await sse.next()).id).toBe("2");
+      await sse.cancel();
+    });
+  }
+});
+
+describe("GET /api/stream hidden sender after accept", () => {
+  it("streams nothing from a handoff whose sender is hidden after the accept", async () => {
+    const { app, repo, viewerToken, dataToken } = setup();
+    const wesleyToken = issueToken(repo, { kind: "bot", botId: "wesley" }).token;
+    await post(app, wesleyToken, [
+      {
+        botId: "wesley",
+        eventId: ulid(1),
+        type: "handoff_sent",
+        to: "data",
+        handoffId: "h-later",
+        label: "LATER-HIDDEN-LABEL",
+      },
+    ]);
+    await post(app, dataToken, [
+      { botId: "data", eventId: ulid(2), type: "handoff_accepted", handoffId: "h-later" },
+    ]);
+    repo.updateBot("wesley", { hidden: true });
+
+    const sse = new Sse(await open(app, { ...auth(viewerToken), "last-event-id": "0" }));
+    const frame = await sse.next();
+    expect(frame.id).toBe("2");
+    expect(frame.data).not.toContain("h-later");
+    expect(frame.data).not.toContain("LATER-HIDDEN-LABEL");
+    expect(frame.data).not.toContain("wesley");
+    await sse.cancel();
+  });
+});
+
 describe("GET /api/stream query", () => {
   it("refuses invalid cursors and unknown params before the stream opens", async () => {
     const { app, viewerToken } = setup();

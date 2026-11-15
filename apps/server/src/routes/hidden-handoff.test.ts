@@ -66,24 +66,89 @@ const replay = (app: App, token: string) =>
 
 type ReplayBody = { events: { type: string; handoffId?: string; label?: string }[] };
 
-describe("handoff_accepted label", () => {
-  it("uses the receiver's own label, never the hidden sender's", async () => {
-    const { app, repo, dataToken } = setup();
-    expect((await accept(app, dataToken, "mine")).status).toBe(200);
-    expect(repo.getBotStatus("data")?.label).toBe("mine");
+const snapshotLabel = async (app: App, token: string, botId: string) => {
+  const body = (await (await app.request("/api/state", { headers: auth(token) })).json()) as {
+    bots: { id: string; label?: string }[];
+  };
+  return body.bots.find((bot) => bot.id === botId)?.label;
+};
 
-    // Status is current state: un-hiding the sender does not restore its label.
+describe("handoff_accepted label (read time)", () => {
+  it("shows the receiver's own label, never the hidden sender's, and restores it on un-hide", async () => {
+    const { app, repo, dataToken, viewerToken } = setup();
+    expect((await accept(app, dataToken, "mine")).status).toBe(200);
+    expect(await snapshotLabel(app, viewerToken, "data")).toBe("mine");
+
+    // Read time: the stored label is the handoff's, so un-hiding brings it back.
     repo.updateBot("ghost", { hidden: false });
-    expect(repo.getBotStatus("data")?.label).toBe("mine");
+    expect(await snapshotLabel(app, viewerToken, "data")).toBe("classified");
   });
 
   it("leaves no label at all when the receiver sends none", async () => {
-    const { app, repo, dataToken } = setup();
+    const { app, dataToken, viewerToken } = setup();
     expect((await accept(app, dataToken)).status).toBe(200);
-    expect(repo.getBotStatus("data")?.label).toBeNull();
+    expect(await snapshotLabel(app, viewerToken, "data")).toBeUndefined();
+  });
 
-    repo.updateBot("ghost", { hidden: false });
-    expect(repo.getBotStatus("data")?.label).toBeNull();
+  it("scrubs a label when the sender is hidden after the accept (Geordi's repro)", async () => {
+    const context = testSetup();
+    cleanups.push(context.close);
+    const { app, repo } = context;
+    repo.upsertBot(botRecord("quark"));
+    repo.upsertBot(botRecord("zeta"));
+    const viewerToken = issueToken(repo, { kind: "viewer" }).token;
+    repo.applyEvents(
+      "quark",
+      [
+        {
+          botId: "quark",
+          eventId: ulid(1),
+          type: "handoff_sent",
+          to: "zeta",
+          handoffId: "h-later",
+          label: "LATER-HIDDEN-LABEL",
+        },
+      ] as never,
+      NOW,
+    );
+    repo.applyEvents(
+      "zeta",
+      [
+        { botId: "zeta", eventId: ulid(2), type: "handoff_accepted", handoffId: "h-later" },
+      ] as never,
+      NOW,
+    );
+    expect(await snapshotLabel(app, viewerToken, "zeta")).toBe("LATER-HIDDEN-LABEL");
+
+    repo.updateBot("quark", { hidden: true });
+    const raw = await (await app.request("/api/state", { headers: auth(viewerToken) })).text();
+    expect(raw).not.toContain("LATER-HIDDEN-LABEL");
+    expect(await snapshotLabel(app, viewerToken, "zeta")).toBeUndefined();
+
+    repo.updateBot("quark", { hidden: false });
+    expect(await snapshotLabel(app, viewerToken, "zeta")).toBe("LATER-HIDDEN-LABEL");
+  });
+
+  it("stops scrubbing once the receiver sets a label of its own", async () => {
+    const { app, dataToken, viewerToken } = setup();
+    await accept(app, dataToken);
+    const res = await app.request("/api/events", {
+      method: "POST",
+      headers: { ...auth(dataToken), "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [
+          {
+            botId: "data",
+            eventId: ulid(3),
+            type: "status_changed",
+            status: "working",
+            label: "own",
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await snapshotLabel(app, viewerToken, "data")).toBe("own");
   });
 });
 

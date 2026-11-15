@@ -263,12 +263,21 @@ events that hand off to it, or open handoffs from or to it. The flag is read at 
 time, so un-hiding a bot shows its history again. `lastSeq` / `lastEventSeq` stay the
 global high-water mark, hidden events included, so `seq` has gaps for viewers.
 
-A visible bot accepting a handoff from a hidden sender leaks nothing from that side: the
-`handoff_accepted` event keeps its `handoffId` in the database but the replay and the
-live stream omit it while the sender stays hidden (read time, so un-hiding restores it),
-and the receiver's status label comes from the accept event's own `label` or stays
-absent — never the hidden handoff's label and never a placeholder (write time, so
-un-hiding does not bring the old label back).
+A visible bot accepting a handoff from a hidden sender leaks nothing from that side, and
+both scrubs happen at read time, so it does not matter whether the sender was hidden
+before or after the accept, and un-hiding restores everything:
+
+- the `handoff_accepted` event keeps its `handoffId` in the database, but the replay and
+  the live stream omit it while the sender is hidden;
+- the receiver's status remembers which handoff its label came from
+  (`bot_status.label_handoff_id`). While that handoff's sender is hidden, the snapshot
+  shows the accept event's own `label` instead, or no label: never the hidden handoff's
+  label and never a placeholder. Any later label change clears the link. Migration 0005
+  backfills the link for accepts stored before it by matching the label text against
+  handoffs the bot accepted (it can only over-attribute, which hides exactly that text).
+
+A visible sender's own handoff label stays visible on the receiver: it is that sender's
+own work.
 
 `GET /api/events?since={seq}&limit={n}` replays the log: events with `seq > since`
 ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
@@ -329,7 +338,15 @@ reconnect and the stream resumes after it; `?since={seq}` does the same for clie
 cannot set the header (`Last-Event-ID` wins when both are present). Without a cursor the
 stream is live only and starts at the current high-water mark. Cursor values follow the
 same rule as `/api/events`; unknown or malformed parameters and a malformed
-`Last-Event-ID` get `400 {"error":"invalid query"}` before the stream opens.
+`Last-Event-ID` get `400 {"error":"invalid query"}` before the stream opens. A cursor past
+the newest event (for example after a database reset) is clamped to the newest event, so
+the stream goes live instead of waiting for ids that will never come.
+
+Every stream starts with `retry: 3000` and a `: open` comment, so `EventSource` fires
+`onopen` (and dev proxies flush the response) right away even when nothing is replayed.
+Stream responses carry `Connection: close`; on `SIGTERM`/`SIGINT` the server ends every
+stream, closes idle keep-alive connections as they appear, and exits without waiting for
+the keep-alive timeout.
 
 Events use the same hidden-bot filter as the replay, so a hidden run in between is
 skipped rather than re-read. A ping every 25 seconds keeps proxies from idling the

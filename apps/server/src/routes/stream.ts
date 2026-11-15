@@ -16,6 +16,8 @@ import { toStreamEvent } from "./mappers.ts";
 export const STREAM_PAGE = 500;
 export const DEFAULT_PING_INTERVAL_MS = 25_000;
 export const DEFAULT_MAX_STREAM_CLIENTS = 200;
+/** EventSource reconnect delay sent in the opening frame. */
+export const STREAM_RETRY_MS = 3000;
 
 /** Tests shorten the ping and the client cap; production uses the defaults. */
 export type StreamConfig = { pingIntervalMs: number; maxClients: number };
@@ -85,7 +87,10 @@ export function streamRoutes({
     // Captured once: every ping re-checks the very credential the stream opened with.
     const header = c.req.header("authorization");
     const secret = getCookie(c, SESSION_COOKIE_NAME);
-    const start = parsed.since ?? repo.lastEventSeq();
+    // A cursor past the newest event (e.g. after a DB reset) is clamped to it, so the
+    // client goes live instead of waiting for ids it will never see.
+    const latest = repo.lastEventSeq();
+    const start = Math.min(parsed.since ?? latest, latest);
 
     const response = streamSSE(c, async (stream) => {
       let cursor = start;
@@ -149,6 +154,10 @@ export function streamRoutes({
       hub.add(client);
       stream.onAbort(stop);
 
+      // First bytes right away: EventSource fires `onopen` and proxies (e.g. the Vite dev
+      // proxy) flush the headers, even when there is nothing to replay yet.
+      await stream.write(`retry: ${STREAM_RETRY_MS}\n: open\n\n`).catch(stop);
+
       timer = setInterval(() => {
         if (stopped) return;
         // A session can expire or be revoked, and a token can die: pings are the check.
@@ -172,6 +181,9 @@ export function streamRoutes({
     });
     // streamSSE asks for `no-cache`; the viewer payload is private, so it wins.
     response.headers.set("Cache-Control", "no-store");
+    // The connection is not reused after a stream ends, so shutdown never waits for an
+    // idle keep-alive socket left behind by one.
+    response.headers.set("Connection", "close");
     return response;
   });
 
