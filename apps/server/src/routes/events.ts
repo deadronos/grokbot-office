@@ -13,10 +13,13 @@ import { toStreamEvent } from "./mappers.ts";
 const EVENTS_LIMIT_DEFAULT = 100;
 const EVENTS_LIMIT_MAX = 500;
 
-/** Query values are digit strings; `Number("")` is 0, so empty input must fail here. */
+/**
+ * Query values are canonical digit strings: `Number("")` is 0, so empty input must
+ * fail here, and leading zeros (`00`, `03`) are refused rather than normalized.
+ */
 const integerQuery = z
   .string()
-  .regex(/^\d+$/, "must be a non-negative integer")
+  .regex(/^(0|[1-9]\d*)$/, "must be a non-negative integer without leading zeros")
   .transform(Number)
   .refine(Number.isSafeInteger, "must be a safe integer");
 
@@ -57,16 +60,19 @@ export function eventRoutes({ repo, adminToken }: { repo: Repo; adminToken: stri
     const query = parseEventsQuery(c);
     if (!query) return c.json({ error: "invalid query" }, 400);
 
-    // One extra row is fetched only to answer `hasMore` without a second query.
-    const rows = repo.listEventsPage(query.since, query.limit);
+    // One read transaction; one extra row answers `hasMore` without a second query.
+    const { rows, lastSeq } = repo.getEventsPage(query.since, query.limit);
     const events = rows.slice(0, query.limit).map(toStreamEvent);
+    const hasMore = rows.length > query.limit;
     // Private data: never let a shared cache keep it.
     c.header("Cache-Control", "no-store");
     return c.json({
       events,
-      nextSince: events.at(-1)?.seq ?? query.since,
-      hasMore: rows.length > query.limit,
-      lastSeq: repo.getLastEventSeq(),
+      // Hidden bots' events leave gaps in `seq`. Once nothing visible is left the
+      // cursor jumps to the high-water mark, so a client never re-reads a hidden run.
+      nextSince: hasMore ? events[events.length - 1].seq : Math.max(query.since, lastSeq),
+      hasMore,
+      lastSeq,
     });
   });
 

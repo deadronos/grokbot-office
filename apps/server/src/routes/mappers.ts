@@ -1,5 +1,5 @@
 import type { BotSnapshot, Handoff, StreamEvent } from "@grokbot-office/shared";
-import { getDesk } from "@grokbot-office/shared";
+import { DESKS, getDesk } from "@grokbot-office/shared";
 
 import type { Bot, Event, Handoff as HandoffRow, Status } from "../db/repo.ts";
 
@@ -7,6 +7,20 @@ import type { Bot, Event, Handoff as HandoffRow, Status } from "../db/repo.ts";
  * Row → shared-schema mapping for the viewer API. Nullable columns are omitted
  * rather than sent as `null`, because the schemas mark them optional.
  */
+const layoutPosition = new Map(DESKS.map((desk, position) => [desk.botId, position]));
+
+/**
+ * Snapshot order: the shared desk layout is canonical (desk and position come from
+ * `getDesk`, never from the DB). Layout bots follow layout order; bots outside the
+ * layout come after, by id, and carry no desk (HUD list only).
+ */
+export function compareByLayout(a: { id: string }, b: { id: string }): number {
+  const pa = layoutPosition.get(a.id) ?? Number.POSITIVE_INFINITY;
+  const pb = layoutPosition.get(b.id) ?? Number.POSITIVE_INFINITY;
+  if (pa !== pb) return pa < pb ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export function toBotSnapshot(bot: Bot, status: Status | undefined): BotSnapshot {
   const desk = getDesk(bot.id);
   return {

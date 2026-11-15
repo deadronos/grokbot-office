@@ -101,8 +101,8 @@ Bots authenticate with their own bot token and may only act for that bot id: a
 token bound elsewhere gets `403`, any missing/unknown/revoked token gets `401`.
 Auth errors are generic; the server logs the reason, never the token.
 
-Register (idempotent upsert of name, role, avatar and pod; the server keeps
-desk assignment and visibility for admins). The reply carries the heartbeat
+Register (idempotent upsert of name, role, avatar and pod; the admin-set `hidden`
+flag is kept, and desks come only from the shared layout). The reply carries the heartbeat
 cadence the bot should use:
 
 ```bash
@@ -179,9 +179,9 @@ bearer token; anything else gets `401`, and a bot token gets `403`. Responses ar
 `Cache-Control: no-store`. #10 adds the HttpOnly session cookie the browser needs for
 SSE, so this API is header-only for now.
 
-`GET /api/state` is the initial snapshot: visible bots (`hidden = false`) ordered by
-desk index then id, their current status, the open (`sent`) handoffs, and the highest
-event sequence:
+`GET /api/state` is the initial snapshot: visible bots (`hidden = false`) in shared
+desk-layout order (bots outside the layout follow, by id), their current status, the
+open (`sent`) handoffs, and the highest event sequence:
 
 ```bash
 curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN"
@@ -227,13 +227,23 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
 }
 ```
 
-Only bots in the shared desk layout carry `desk`; a bot without a status row is
-`offline` since its registration time with `lastEventSeq: 0`. Optional fields are
-omitted rather than sent as `null`.
+The shared fixed layout (`DESKS` / `getDesk` in `packages/shared`) is the only source
+of desks: only its bots carry `desk` (the others are HUD-list only), and there is no
+per-bot desk field in the database or in `PATCH /api/admin/bots/:id`. A bot without a
+status row is `offline` since its registration time with `lastEventSeq: 0`. Optional
+fields are omitted rather than sent as `null`.
+
+Hidden bots stay out of both read routes. `hidden` is display-only: a hidden bot can
+still register, heartbeat and post events, but viewers never see the bot, its events,
+events that hand off to it, or open handoffs from or to it. The flag is read at request
+time, so un-hiding a bot shows its history again. `lastSeq` / `lastEventSeq` stay the
+global high-water mark, hidden events included, so `seq` has gaps for viewers.
 
 `GET /api/events?since={seq}&limit={n}` replays the log: events with `seq > since`
 ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
-500). Unknown, repeated or malformed parameters get `400 {"error":"invalid query"}`.
+500). Values are plain decimal integers without leading zeros (`since=00` and
+`limit=03` are refused). Unknown, repeated or malformed parameters get
+`400 {"error":"invalid query"}`.
 Each event is a `StreamEvent`: `to` is a handoff's target bot, `at` the clamped client
 time and `receivedAt` the server time.
 
@@ -260,10 +270,12 @@ curl -sS 'http://127.0.0.1:8787/api/events?since=42&limit=100' \
 }
 ```
 
-`nextSince` is the `since` for the next call (the last returned seq, or the request's
-`since` when the page is empty); `hasMore` says whether more events exist after it;
-`lastSeq` is the highest sequence in the database. A `since` past the end returns an
-empty page.
+`nextSince` is the `since` for the next call; `hasMore` says whether more visible
+events exist after it; `lastSeq` is the highest sequence in the database. While
+`hasMore` is true, `nextSince` is the last returned seq. On the last page it is
+`lastSeq` (or the request's `since`, if that is larger), so a trailing run of hidden
+events is skipped instead of re-read on every poll. The page and `lastSeq` come from
+one read transaction. A `since` past the end returns an empty page.
 
 ## CI
 

@@ -185,9 +185,11 @@ describe("admin token endpoints", () => {
         body: JSON.stringify(body),
       });
 
-    const res = await patch("data", { name: "Data II", deskIndex: 3, hidden: true });
+    const res = await patch("data", { name: "Data II", hidden: true });
     expect(res.status).toBe(200);
-    expect(repo.getBot("data")).toMatchObject({ name: "Data II", deskIndex: 3, hidden: true });
+    expect(repo.getBot("data")).toMatchObject({ name: "Data II", hidden: true });
+    // Desks come from the shared layout only; the old field is now an unknown key.
+    expect((await patch("data", { deskIndex: 3 })).status).toBe(400);
 
     expect((await patch("data", { pod: "ops" })).status).toBe(200);
     expect(repo.getBot("data")?.pod).toBe("ops");

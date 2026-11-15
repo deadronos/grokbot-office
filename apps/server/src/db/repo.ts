@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, notInArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
@@ -89,10 +89,13 @@ export interface Repo {
   setBotStatus(status: Status): void;
   insertEvent(event: NewEvent): { duplicate: boolean; seq: number };
   listEventsSince(seq: number): Event[];
-  /** Up to `limit + 1` events after `seq`, ascending; the extra row tells `hasMore`. */
-  listEventsPage(seq: number, limit: number): Event[];
-  /** Highest `events.seq`, or 0 when no event was recorded yet. */
-  getLastEventSeq(): number;
+  /**
+   * Viewer page, one read transaction: up to `limit + 1` visible events after `seq`,
+   * ascending (the extra row tells `hasMore`), plus the global `events.seq`
+   * high-water mark (0 when empty). Events of hidden bots, as sender or as handoff
+   * target, are skipped.
+   */
+  getEventsPage(seq: number, limit: number): { rows: Event[]; lastSeq: number };
   /** Bots, statuses, open handoffs and the event high-water mark in one transaction. */
   getSnapshot(): SnapshotRows;
   /**
@@ -114,15 +117,24 @@ export interface Repo {
 
 export function createSqliteRepo(sqlite: Database.Database): Repo {
   const db = drizzle(sqlite);
+  /** `db` or a transaction: both read the same way. */
+  type Reader = Pick<typeof db, "select">;
+  /** Highest `events.seq` (0 when empty): a global mark, hidden bots' events included. */
+  const lastEventSeq = (reader: Reader): number =>
+    reader.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()?.seq ??
+    0;
+  /** Subquery of hidden bot ids, read live: un-hiding a bot shows its history again. */
+  const hiddenBotIds = (reader: Reader) =>
+    reader.select({ id: bots.id }).from(bots).where(eq(bots.hidden, true));
   return {
     upsertBot: (bot) => {
       db.insert(bots).values(bot).onConflictDoUpdate({ target: bots.id, set: bot }).run();
     },
     registerBot: (bot, now) => {
       db.transaction((tx) => {
-        // Admin-owned fields (desk_index, hidden) and created_at survive a re-register.
+        // The admin-owned `hidden` flag and created_at survive a re-register.
         tx.insert(bots)
-          .values({ ...bot, deskIndex: null, hidden: false, createdAt: now, updatedAt: now })
+          .values({ ...bot, hidden: false, createdAt: now, updatedAt: now })
           .onConflictDoUpdate({
             target: bots.id,
             set: {
@@ -194,36 +206,50 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     },
     listEventsSince: (seq) =>
       db.select().from(events).where(gt(events.seq, seq)).orderBy(events.seq).all(),
-    listEventsPage: (seq, limit) =>
-      db
-        .select()
-        .from(events)
-        .where(gt(events.seq, seq))
-        .orderBy(events.seq)
-        .limit(limit + 1)
-        .all(),
-    getLastEventSeq: () =>
-      db.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()?.seq ??
-      0,
+    getEventsPage: (seq, limit) =>
+      db.transaction((tx) => {
+        const hiddenIds = hiddenBotIds(tx);
+        return {
+          rows: tx
+            .select()
+            .from(events)
+            .where(
+              and(
+                gt(events.seq, seq),
+                notInArray(events.botId, hiddenIds),
+                or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
+              ),
+            )
+            .orderBy(events.seq)
+            .limit(limit + 1)
+            .all(),
+          lastSeq: lastEventSeq(tx),
+        };
+      }),
     getSnapshot: () =>
       db.transaction((tx) => ({
         bots: tx
           .select()
           .from(bots)
           .where(eq(bots.hidden, false))
-          // SQLite sorts NULL first; bots without a desk index go last instead.
-          .orderBy(sql`${bots.deskIndex} is null`, asc(bots.deskIndex), asc(bots.id))
+          // Layout order is applied by the route; the DB only gives a stable base order.
+          .orderBy(asc(bots.id))
           .all(),
         statuses: tx.select().from(botStatus).all(),
+        // A handoff from or to a hidden bot stays out, like the bot itself.
         openHandoffs: tx
           .select()
           .from(handoffs)
-          .where(eq(handoffs.state, "sent"))
+          .where(
+            and(
+              eq(handoffs.state, "sent"),
+              notInArray(handoffs.fromBotId, hiddenBotIds(tx)),
+              notInArray(handoffs.toBotId, hiddenBotIds(tx)),
+            ),
+          )
           .orderBy(handoffs.sentAt, handoffs.id)
           .all(),
-        lastEventSeq:
-          tx.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()
-            ?.seq ?? 0,
+        lastEventSeq: lastEventSeq(tx),
       })),
     applyEvents: (botId, inputs, now) =>
       db.transaction((tx) => {

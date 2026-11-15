@@ -23,7 +23,6 @@ const PatchBotBody = z
     role: RegisterBody.shape.role.optional(),
     avatar: RegisterBody.shape.avatar.optional(),
     pod: RegisterBody.shape.pod.optional(),
-    deskIndex: z.number().int().nonnegative().nullable().optional(),
     hidden: z.boolean().optional(),
   })
   .strict();

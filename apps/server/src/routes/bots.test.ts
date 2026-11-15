@@ -91,14 +91,13 @@ describe("POST /api/bots/register", () => {
     expect(second.status).toBe(200);
     await expect(second.json()).resolves.toEqual(await first.json());
 
-    repo.updateBot("data", { deskIndex: 3, hidden: true });
+    repo.updateBot("data", { hidden: true });
     await register(app, dataToken, { ...body, name: "Data II", pod: "ops" });
 
     const bot = repo.getBot("data");
     expect(bot).toMatchObject({
       name: "Data II",
       pod: "ops",
-      deskIndex: 3,
       hidden: true,
       createdAt: "2026-01-01T00:00:00.000Z",
     });

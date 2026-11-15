@@ -5,7 +5,7 @@ import type { StateSnapshot } from "@grokbot-office/shared";
 import type { AppEnv } from "../auth/middleware.ts";
 import { requireViewer } from "../auth/middleware.ts";
 import type { Repo } from "../db/repo.ts";
-import { toBotSnapshot, toHandoff } from "./mappers.ts";
+import { compareByLayout, toBotSnapshot, toHandoff } from "./mappers.ts";
 
 /** Viewer snapshot: who is where and doing what, plus the event high-water mark. */
 export function stateRoutes({ repo, adminToken }: { repo: Repo; adminToken: string | undefined }) {
@@ -17,7 +17,9 @@ export function stateRoutes({ repo, adminToken }: { repo: Repo; adminToken: stri
     const snapshot = repo.getSnapshot();
     const statuses = new Map(snapshot.statuses.map((status) => [status.botId, status]));
     const body: StateSnapshot = {
-      bots: snapshot.bots.map((bot) => toBotSnapshot(bot, statuses.get(bot.id))),
+      bots: snapshot.bots
+        .toSorted(compareByLayout)
+        .map((bot) => toBotSnapshot(bot, statuses.get(bot.id))),
       openHandoffs: snapshot.openHandoffs.map(toHandoff),
       lastEventSeq: snapshot.lastEventSeq,
     };

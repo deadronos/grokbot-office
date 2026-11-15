@@ -14,7 +14,6 @@ const bot = (id: string) => ({
   role: "worker",
   avatar: "robot",
   pod: "dev" as const,
-  deskIndex: 0,
   hidden: false,
   createdAt: now,
   updatedAt: now,
@@ -147,10 +146,9 @@ describe("SQLite repository", () => {
       "revoked_at",
     ]);
   });
-  it("stores bots without a desk and events without a client timestamp", () => {
+  it("stores events without a client timestamp", () => {
     const { repo } = setup();
-    repo.upsertBot({ ...bot("guest"), deskIndex: null });
-    expect(repo.getBot("guest")?.deskIndex).toBeNull();
+    repo.upsertBot(bot("guest"));
     const result = repo.insertEvent({
       eventId: "01JD7X5K2M3Q8V9R4T6Y0ZB1AC",
       botId: "guest",
@@ -165,14 +163,13 @@ describe("SQLite repository", () => {
     const later = "2026-02-01T00:00:00.000Z";
     const profile = { id: "a", name: "A", role: "worker", avatar: "robot", pod: "dev" as const };
     repo.registerBot(profile, now);
-    repo.updateBot("a", { deskIndex: 7, hidden: true });
+    repo.updateBot("a", { hidden: true });
     repo.registerBot({ ...profile, name: "A II", pod: "ops" }, later);
 
     expect(repo.getBot("a")).toEqual({
       ...profile,
       name: "A II",
       pod: "ops",
-      deskIndex: 7,
       hidden: true,
       createdAt: now,
       updatedAt: later,

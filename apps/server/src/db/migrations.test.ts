@@ -67,12 +67,10 @@ describe("0001_constraints migration", () => {
         // Enforcement is back on after the migration ran.
         expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
 
-        expect(db.prepare("select * from bots where id = 'data'").get()).toMatchObject({
-          name: "Data",
-          desk_index: 3,
-          hidden: 1,
-          created_at: NOW,
-        });
+        const bot = db.prepare("select * from bots where id = 'data'").get();
+        expect(bot).toMatchObject({ name: "Data", hidden: 1, created_at: NOW });
+        // 0003 drops desk_index: desks come from the shared layout only.
+        expect(bot).not.toHaveProperty("desk_index");
         expect(db.prepare("select * from bot_status").get()).toMatchObject({
           bot_id: "data",
           status: "working",
@@ -131,10 +129,9 @@ describe("0001_constraints migration", () => {
   it("rejects bad enum values and dangling handoff ids", () => {
     const db = openDatabase(":memory:");
     try {
-      db.prepare("insert into bots values ('data','Data','worker','robot','dev',0,0,?,?)").run(
-        NOW,
-        NOW,
-      );
+      db.prepare(
+        "insert into bots (id, name, role, avatar, pod, hidden, created_at, updated_at) values ('data','Data','worker','robot','dev',0,?,?)",
+      ).run(NOW, NOW);
       const insertStatus = db.prepare(
         "insert into bot_status (bot_id, status, since, last_heartbeat_at) values ('data', ?, ?, ?)",
       );
@@ -158,9 +155,7 @@ describe("0001_constraints migration", () => {
         db.prepare("insert into handoffs values ('h','data','data',null,'weird',?,null)").run(NOW),
       ).toThrow(/CHECK/);
       expect(() =>
-        db
-          .prepare("insert into bots values ('b','B','worker','robot','moon',0,0,?,?)")
-          .run(NOW, NOW),
+        db.prepare("insert into bots values ('b','B','worker','robot','moon',0,?,?)").run(NOW, NOW),
       ).toThrow(/CHECK/);
     } finally {
       db.close();

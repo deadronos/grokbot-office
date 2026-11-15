@@ -32,14 +32,16 @@ const UNAUTHORIZED = { error: "unauthorized" };
 const FORBIDDEN = { error: "forbidden" };
 
 describe("GET /api/state", () => {
-  it("returns visible bots in desk order, with offline defaults and no nulls", async () => {
+  it("orders bots by the shared desk layout, with non-layout bots after by id", async () => {
     const { app, repo, viewerToken } = setup();
-    repo.upsertBot({ ...botRecord("data"), deskIndex: 1 });
-    repo.upsertBot({ ...botRecord("alpha"), deskIndex: 1 });
-    // Not in the desk layout: it shows in the HUD list only.
-    repo.upsertBot({ ...botRecord("helper"), deskIndex: 0 });
-    repo.upsertBot({ ...botRecord("hidden"), hidden: true });
-    repo.upsertBot({ ...botRecord("aardvark"), deskIndex: null });
+    // Inserted out of order: the layout, not insertion or the DB, decides.
+    repo.upsertBot(botRecord("geordi"));
+    repo.upsertBot(botRecord("lumi"));
+    // Not in the desk layout: HUD list only, sorted by id after the layout bots.
+    repo.upsertBot(botRecord("helper"));
+    repo.upsertBot(botRecord("alpha"));
+    repo.upsertBot(botRecord("aardvark"));
+    repo.upsertBot({ ...botRecord("worf"), hidden: true });
 
     const res = await get(app, viewerToken);
     expect(res.status).toBe(200);
@@ -47,26 +49,28 @@ describe("GET /api/state", () => {
 
     const body = StateSnapshot.parse(await res.json());
 
-    // desk index first, then id, no desk index last; the hidden bot is gone.
+    // The hidden bot is gone even though it has a layout desk.
     expect(body.bots.map((bot) => bot.id)).toEqual([
-      "helper",
-      "wesley",
-      "alpha",
+      "lumi",
       "data",
+      "wesley",
+      "geordi",
       "aardvark",
+      "alpha",
+      "helper",
     ]);
-    expect(body.bots[0]).not.toHaveProperty("desk");
-    expect(body.bots[3]?.desk).toEqual(getDesk("data"));
+    for (const bot of body.bots.slice(0, 4)) expect(bot.desk).toEqual(getDesk(bot.id));
+    for (const bot of body.bots.slice(4)) expect(bot).not.toHaveProperty("desk");
 
     // No status row yet: offline since registration, no events.
-    expect(body.bots[3]).toMatchObject({
+    expect(body.bots[1]).toMatchObject({
       status: "offline",
       since: NOW,
       lastHeartbeatAt: NOW,
       lastEventSeq: 0,
     });
-    expect(body.bots[3]).not.toHaveProperty("label");
-    expect(body.bots[3]).not.toHaveProperty("taskId");
+    expect(body.bots[1]).not.toHaveProperty("label");
+    expect(body.bots[1]).not.toHaveProperty("taskId");
     expect(body).toMatchObject({ openHandoffs: [], lastEventSeq: 0 });
   });
 
@@ -132,6 +136,49 @@ describe("GET /api/state", () => {
     ]);
     expect(body.openHandoffs[0]).not.toHaveProperty("label");
     expect(body.openHandoffs[0]).not.toHaveProperty("acceptedAt");
+  });
+});
+
+describe("GET /api/state with hidden bots", () => {
+  it("leaves out handoffs from or to a hidden bot (Geordi's repro)", async () => {
+    const { app, repo, viewerToken } = setup();
+    repo.upsertBot({ ...botRecord("ghost"), hidden: true });
+    repo.applyEvents(
+      "ghost",
+      [
+        { botId: "ghost", eventId: ulid(1), type: "task_started", taskId: "classified" },
+        {
+          botId: "ghost",
+          eventId: ulid(2),
+          type: "handoff_sent",
+          to: "data",
+          handoffId: "h-secret",
+          taskId: "classified",
+        },
+      ],
+      NOW,
+    );
+    repo.applyEvents(
+      "wesley",
+      [{ botId: "wesley", eventId: ulid(3), type: "handoff_sent", to: "ghost", handoffId: "h-in" }],
+      NOW,
+    );
+    repo.applyEvents(
+      "data",
+      [{ botId: "data", eventId: ulid(4), type: "handoff_sent", to: "wesley", handoffId: "h-ok" }],
+      NOW,
+    );
+
+    const res = await get(app, viewerToken);
+    const text = await res.text();
+    const body = StateSnapshot.parse(JSON.parse(text));
+    expect(body.bots.map((bot) => bot.id)).toEqual(["data", "wesley"]);
+    expect(body.openHandoffs.map((handoff) => handoff.id)).toEqual(["h-ok"]);
+    for (const secret of ["ghost", "classified", "h-secret", "h-in"]) {
+      expect(text).not.toContain(secret);
+    }
+    // The high-water mark stays global, like GET /api/events.
+    expect(body.lastEventSeq).toBe(4);
   });
 });
 

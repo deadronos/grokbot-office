@@ -59,6 +59,23 @@ const ev = (id: number, type: string, extra: Record<string, unknown> = {}) => ({
 });
 const batch = (...events: object[]) => ({ events });
 
+/** Geordi's repro: hidden `ghost` starts `classified` and hands `h-secret` to data. */
+const ghost = (id: number, type: string, extra: Record<string, unknown> = {}) => ({
+  ...ev(id, type, extra),
+  botId: "ghost",
+});
+const SECRETS = ["ghost", "classified", "h-secret"];
+const seqs = (body: EventsPage) => body.events.map((event) => event.seq);
+
+function hiddenSetup() {
+  const context = setup();
+  context.repo.upsertBot({ ...botRecord("ghost"), hidden: true });
+  // Hidden is display-only: the bot can still post. Direct repo calls keep this short.
+  const ghostEvents = (...events: ReturnType<typeof ghost>[]) =>
+    context.repo.applyEvents("ghost", events as never, NOW);
+  return { ...context, ghostEvents };
+}
+
 describe("POST /api/events", () => {
   it("accepts a batch, stores the events and derives the status", async () => {
     const { app, repo, dataToken } = setup();
@@ -573,6 +590,76 @@ describe("GET /api/events", () => {
     expect(beyond).toEqual({ events: [], nextSince: 999, hasMore: false, lastSeq: 4 });
   });
 
+  describe("hidden bots", () => {
+    it("leaves out events by a hidden bot and handoffs addressed to one", async () => {
+      const { app, dataToken, viewerToken, ghostEvents } = hiddenSetup();
+      expect(
+        (await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t-1" })))).status,
+      ).toBe(200);
+      ghostEvents(
+        ghost(2, "task_started", { taskId: "classified", label: "classified" }),
+        ghost(3, "handoff_sent", { to: "data", handoffId: "h-secret", taskId: "classified" }),
+      );
+      const toGhost = ev(4, "handoff_sent", { to: "ghost", handoffId: "h-in" });
+      expect((await post(app, dataToken, batch(toGhost))).status).toBe(200);
+      const after = ev(5, "status_changed", { status: "working" });
+      expect((await post(app, dataToken, batch(after))).status).toBe(200);
+
+      const res = await getEvents(app, viewerToken);
+      const text = await res.text();
+      const body = JSON.parse(text) as EventsPage;
+      expect(body.events.map((event) => event.seq)).toEqual([1, 5]);
+      for (const secret of [...SECRETS, "h-in"]) expect(text).not.toContain(secret);
+      // The high-water mark stays global; seq paging already tolerates gaps.
+      expect(body).toMatchObject({ nextSince: 5, hasMore: false, lastSeq: 5 });
+    });
+
+    it("pages past runs of hidden events without stalling", async () => {
+      const { app, dataToken, viewerToken, ghostEvents } = hiddenSetup();
+      await post(app, dataToken, batch(ev(1, "status_changed", { status: "working" })));
+      ghostEvents(...[2, 3, 4, 5, 6].map((n) => ghost(n, "status_changed", { status: "idle" })));
+      await post(app, dataToken, batch(ev(7, "status_changed", { status: "idle" })));
+      await post(app, dataToken, batch(ev(8, "status_changed", { status: "working" })));
+
+      const page = async (query: string) =>
+        (await (await getEvents(app, viewerToken, query)).json()) as EventsPage;
+
+      const first = await page("?limit=1");
+      expect([seqs(first), first]).toMatchObject([[1], { nextSince: 1, hasMore: true }]);
+      // A whole page's worth of hidden rows sits between 1 and 7: skipped, not returned.
+      const second = await page(`?since=${first.nextSince}&limit=1`);
+      expect([seqs(second), second]).toMatchObject([[7], { nextSince: 7, hasMore: true }]);
+      const third = await page(`?since=${second.nextSince}&limit=1`);
+      expect([seqs(third), third]).toMatchObject([[8], { nextSince: 8, hasMore: false }]);
+    });
+
+    it("moves the cursor to lastSeq when only hidden events remain", async () => {
+      const { app, dataToken, viewerToken, ghostEvents } = hiddenSetup();
+      await post(app, dataToken, batch(ev(1, "status_changed", { status: "working" })));
+      ghostEvents(...[2, 3, 4].map((n) => ghost(n, "status_changed", { status: "idle" })));
+
+      const body = (await (
+        await getEvents(app, viewerToken, "?since=1&limit=2")
+      ).json()) as EventsPage;
+      expect(body).toEqual({ events: [], nextSince: 4, hasMore: false, lastSeq: 4 });
+
+      // The next visible event is found from there.
+      await post(app, dataToken, batch(ev(5, "status_changed", { status: "idle" })));
+      const next = (await (
+        await getEvents(app, viewerToken, `?since=${body.nextSince}`)
+      ).json()) as EventsPage;
+      expect(next.events.map((event) => event.seq)).toEqual([5]);
+    });
+
+    it("shows the history again once the bot is un-hidden", async () => {
+      const { app, repo, viewerToken, ghostEvents } = hiddenSetup();
+      ghostEvents(ghost(1, "task_started", { taskId: "classified" }));
+      repo.updateBot("ghost", { hidden: false });
+      const body = (await (await getEvents(app, viewerToken)).json()) as EventsPage;
+      expect(body.events.map((event) => event.botId)).toEqual(["ghost"]);
+    });
+  });
+
   it("returns an empty, resumable page on an empty database", async () => {
     const { app, viewerToken } = setup();
     const body = await (await getEvents(app, viewerToken)).json();
@@ -591,6 +678,9 @@ describe("GET /api/events", () => {
       "unknown=1",
       "since=1&since=2",
       "limit=1&limit=2",
+      "since=00",
+      "since=01",
+      "limit=03",
     ];
 
     for (const query of cases) {
