@@ -158,12 +158,17 @@ export interface Repo {
     idleCutoff: string,
   ): number;
   findSessionByHash(hash: string): Session | undefined;
+  findSessionByPrevHash(hash: string): Session | undefined;
+  getSession(id: string): Session | undefined;
   /** Revocation is idempotent: the first timestamp wins. */
   revokeSession(id: string, revokedAt: string): void;
-  /** Moves the idle clock; `createdAt` also anchors the rotation clock. */
+  /** Moves the idle clock. `createdAt` stays the login time and is the cap eviction order. */
   touchSession(id: string, lastSeenAt: string): void;
-  /** Replaces the cookie hash on the same row, so the cap keeps counting one session. */
-  replaceSessionSecret(id: string, tokenHash: string, now: string): void;
+  /**
+   * Compare-and-swap rotation: only the request that still sees `expectedHash` as current
+   * writes the new hash. `createdAt` is left alone. Returns false if a race already won.
+   */
+  rotateSessionCas(id: string, expectedHash: string, tokenHash: string, now: string): boolean;
   /** Highest `events.seq`, hidden bots included; 0 when empty. */
   lastEventSeq(): number;
   /**
@@ -699,6 +704,9 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       }),
     findSessionByHash: (hash) =>
       db.select().from(sessions).where(eq(sessions.tokenHash, hash)).get(),
+    findSessionByPrevHash: (hash) =>
+      db.select().from(sessions).where(eq(sessions.prevTokenHash, hash)).get(),
+    getSession: (id) => db.select().from(sessions).where(eq(sessions.id, id)).get(),
     revokeSession: (id, revokedAt) => {
       // `expires_at` is the stored ISO text, so time order is text order.
       db.update(sessions)
@@ -709,12 +717,25 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     touchSession: (id, lastSeenAt) => {
       db.update(sessions).set({ lastSeenAt }).where(eq(sessions.id, id)).run();
     },
-    replaceSessionSecret: (id, tokenHash, now) => {
-      // Same row: the cap count does not change and `created_at` restarts the rotation clock.
-      db.update(sessions)
-        .set({ tokenHash, createdAt: now, lastSeenAt: now })
-        .where(eq(sessions.id, id))
+    rotateSessionCas: (id, expectedHash, tokenHash, now) => {
+      // Same row: the cap count is unchanged. `created_at` stays the login time.
+      const result = db
+        .update(sessions)
+        .set({
+          tokenHash,
+          prevTokenHash: expectedHash,
+          rotatedAt: now,
+          lastSeenAt: now,
+        })
+        .where(
+          and(
+            eq(sessions.id, id),
+            eq(sessions.tokenHash, expectedHash),
+            isNull(sessions.revokedAt),
+          ),
+        )
         .run();
+      return result.changes === 1;
     },
     lastEventSeq: () => lastEventSeq(db),
     sweepStaleBots: (cutoff, now) =>

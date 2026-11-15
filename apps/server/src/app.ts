@@ -104,6 +104,11 @@ export function createApp({
         c.req.path.startsWith("/api/") ? API_CSP : WEB_CSP,
       );
     }
+    // The Funnel/bot port is HTTP-to-the-process even when Funnel wraps it; HSTS
+    // belongs on the viewer surface (and the single-port app that also serves it).
+    if (surface !== "bot" && !c.res.headers.has("Strict-Transport-Security")) {
+      c.res.headers.set("Strict-Transport-Security", "max-age=31536000");
+    }
   });
 
   // Exact origins only, and set after the response exists: hono's `cors` helper touches
@@ -184,6 +189,9 @@ export function createApp({
     "/api/stream",
     streamRoutes({ repo, adminToken, hub, policy: session, config: stream }),
   );
+
+  // Unknown API paths must not fall through to the SPA index.html.
+  app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
   if (webDist !== undefined && surface !== "bot") {
     // Real files first, then index.html for client-side routes (the viewer is an SPA).

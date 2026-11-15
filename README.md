@@ -274,20 +274,29 @@ Each viewer token may hold `SESSION_MAX_PER_TOKEN` sessions at once (default 5, 
 50). Creating one past the cap revokes the oldest session of that token, so a leaked
 cookie does not accumulate: it is replaced, not joined. Expired rows are dropped in the
 same transaction, so dead sessions never count. A session also ends after
-`SESSION_IDLE_SEC` without a request (default 3600, never above the TTL), and its cookie
-secret is replaced after `SESSION_ROTATE_SEC` (default 900) on the next non-stream
-request that presents it: the response carries a fresh `Set-Cookie` with the remaining
-TTL and the old secret answers `401`. An open `GET /api/stream` never rotates (it cannot
-read a new cookie) but does keep the session awake, on open and on every ping.
+`SESSION_IDLE_SEC` without a request (default 3600, at least 60 so it stays above the
+25s SSE ping, and never above the TTL). An open tab with a live `GET /api/stream` never
+goes idle: pings refresh `last_seen_at` (intended). The cookie secret is replaced after
+`SESSION_ROTATE_SEC` (default 900) on the next non-stream request that presents the
+current hash: the response carries a fresh `Set-Cookie` with the remaining TTL, and
+`created_at` stays the login time so the per-token cap still evicts the oldest login.
+The previous hash stays valid for `SESSION_ROTATE_GRACE_SEC` (default 60) and does not
+rotate again, so in-flight requests and a reload that drops a `Set-Cookie` still work.
+After the grace window the previous hash answers `401`. Rotation is compare-and-swap on
+the current hash, so two requests racing at the boundary cannot lock the client out.
+An open `GET /api/stream` never rotates (it cannot read a new cookie) and re-checks the
+session by id, so a rotation does not kill the stream; a revoke, expiry or idle still does.
 
 All three failure modes look the same from outside: a generic
 `401 {"error":"unauthorized"}`, like any other rejected credential.
 
-Cookie-authenticated writes (`POST /api/session/logout`) are checked against `Origin`
-first: a present origin that is neither in `CORS_ORIGINS` nor the request's own origin
-gets `403 {"error":"forbidden"}` and changes nothing. Requests without `Origin` (curl)
-and browsers reporting `Sec-Fetch-Site: same-origin`/`same-site` are allowed. Reads never
-need an origin, so the viewer keeps working.
+Cookie-authenticated writes (`POST /api/session/logout`) are checked for CSRF:
+`Sec-Fetch-Site: same-origin` is accepted first. Otherwise a present `Origin` must
+either be in `CORS_ORIGINS` or have the same host[:port] as the `Host` header (scheme
+ignored), so a TLS-terminating proxy — browser `https://` Origin, Node seeing `http://`
+— still matches. A foreign host gets `403 {"error":"forbidden"}` and changes nothing.
+Requests without `Origin` (curl) and browsers reporting `Sec-Fetch-Site: same-site` are
+allowed. Reads never need an origin, so the viewer keeps working.
 
 ### CORS and rate limits
 
@@ -298,24 +307,31 @@ Preflight `OPTIONS` requests are answered before any auth or body read; an unlis
 origin gets a headerless `204` and the browser blocks the real request. The Vite dev
 proxy is covered without configuration: the request's own origin is always trusted.
 
-Two token-bucket budgets apply: `RATE_LIMIT_PER_MIN` (default 60) with
+Two plus one token-bucket budgets apply: `RATE_LIMIT_PER_MIN` (default 60) with
 `RATE_LIMIT_BURST` (default 20) per authenticated token or session, and
 `RATE_LIMIT_IP_PER_MIN` (default 30) with `RATE_LIMIT_IP_BURST` (default 10) per client
-address for unauthenticated requests. A burst above its per-minute budget is rejected at
-startup. Over the limit the answer is `429 {"error":"rate limited"}` with `Retry-After`;
-`GET /api/health` is exempt, and rejected credentials still count. The address comes from
-the socket, never from `X-Forwarded-For`, because the server binds loopback: a local
-proxy connects from `127.0.0.1`, which is all this limit is for.
+address for unauthenticated requests that present no credentials. Failed bearer/token
+attempts use a separate bucket with those same IP numbers, and are counted only after
+they fail, so a flood of bad tokens cannot turn a valid or expired cookie into `429`.
+Logout is not rate-limited: it revokes first (after the CSRF check) so a flood cannot
+leave a live cookie in place. In `VIEWER_TAILNET_ONLY` mode each port has its own
+buckets. A burst above its per-minute budget is rejected at startup. Over the limit the
+answer is `429 {"error":"rate limited"}` with `Retry-After`; `GET /api/health` is exempt.
+The address comes from the socket, never from `X-Forwarded-For`, because the server binds
+loopback: a local proxy connects from `127.0.0.1`, which is all this limit is for.
 
 ### Security headers
 
 Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 `Referrer-Policy: no-referrer` and
-`Permissions-Policy: camera=(), microphone=(), geolocation=()`. `/api` responses add a
-closed CSP (`default-src 'none'; frame-ancestors 'none'; base-uri 'none'`); the web app
-is served with a CSP that allows only same-origin scripts and styles, with no
-`unsafe-eval` (`style-src` keeps `'unsafe-inline'` for React's style attributes), and
-`frame-ancestors 'none'`, so the viewer cannot be framed either.
+`Permissions-Policy: camera=(), microphone=(), geolocation=()`. The viewer surface (and
+the single-port app that also serves it) adds `Strict-Transport-Security: max-age=31536000`
+with no `preload`. `/api` responses add a closed CSP (`default-src 'none'; frame-ancestors
+'none'; base-uri 'none'`); the web app is served with a CSP that allows only same-origin
+scripts and styles, with no `unsafe-eval` (`style-src` keeps `'unsafe-inline'` for React's
+style attributes), and `frame-ancestors 'none'`, so the viewer cannot be framed either.
+Unknown `/api/*` paths always return `404 {"error":"not found"}`, never the SPA
+`index.html`.
 
 ### Public bot API, private viewer
 

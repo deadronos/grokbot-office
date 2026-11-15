@@ -16,6 +16,10 @@ export const SESSION_MAX_PER_TOKEN_LIMIT = 50;
 /** An hour without a request ends the session; a rotation every 15 minutes refreshes it. */
 export const DEFAULT_SESSION_IDLE_SEC = 3600;
 export const DEFAULT_SESSION_ROTATE_SEC = 900;
+/** Previous cookie hash stays valid this long after a rotation, so in-flight requests survive. */
+export const DEFAULT_SESSION_ROTATE_GRACE_SEC = 60;
+/** Idle must stay above the 25 s SSE ping, or an open stream could not keep a session alive. */
+export const SESSION_IDLE_MIN_SEC = 60;
 
 /** Event and closed-handoff retention; the nightly prune drops older rows. */
 export const DEFAULT_RETENTION_DAYS = 90;
@@ -94,6 +98,7 @@ export type SessionConfig = {
   maxPerToken: number;
   idleSec: number;
   rotateSec: number;
+  graceSec: number;
 };
 
 /** Sessions per viewer token. Out-of-range values stop the server at startup. */
@@ -124,6 +129,11 @@ export function resolveSessionIdleSec(
     Math.min(DEFAULT_SESSION_IDLE_SEC, ttlSec),
     "SESSION_IDLE_SEC",
   );
+  if (idleSec < SESSION_IDLE_MIN_SEC) {
+    throw new Error(
+      `SESSION_IDLE_SEC must be at least ${SESSION_IDLE_MIN_SEC} (above the 25s stream ping), got "${idleSec}"`,
+    );
+  }
   if (idleSec > ttlSec) {
     throw new Error(`SESSION_IDLE_SEC (${idleSec}) must not exceed SESSION_TTL_SEC (${ttlSec})`);
   }
@@ -148,6 +158,24 @@ export function resolveSessionRotateSec(
   return rotateSec;
 }
 
+/** How long the previous cookie hash stays valid after a rotation. */
+export function resolveSessionRotateGraceSec(
+  env: Record<string, string | undefined> = process.env,
+  ttlSec: number = resolveSessionTtlSec(env),
+): number {
+  const graceSec = positiveInt(
+    env.SESSION_ROTATE_GRACE_SEC,
+    Math.min(DEFAULT_SESSION_ROTATE_GRACE_SEC, ttlSec),
+    "SESSION_ROTATE_GRACE_SEC",
+  );
+  if (graceSec > ttlSec) {
+    throw new Error(
+      `SESSION_ROTATE_GRACE_SEC (${graceSec}) must not exceed SESSION_TTL_SEC (${ttlSec})`,
+    );
+  }
+  return graceSec;
+}
+
 /** All session knobs together, each validated against the resolved TTL. */
 export function resolveSessionConfig(
   env: Record<string, string | undefined> = process.env,
@@ -158,6 +186,7 @@ export function resolveSessionConfig(
     maxPerToken: resolveSessionMaxPerToken(env),
     idleSec: resolveSessionIdleSec(env, ttlSec),
     rotateSec: resolveSessionRotateSec(env, ttlSec),
+    graceSec: resolveSessionRotateGraceSec(env, ttlSec),
   };
 }
 

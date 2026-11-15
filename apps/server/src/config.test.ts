@@ -7,6 +7,7 @@ import {
   RETENTION_DAYS_MAX,
   DEFAULT_SESSION_IDLE_SEC,
   DEFAULT_SESSION_ROTATE_SEC,
+  DEFAULT_SESSION_ROTATE_GRACE_SEC,
   DEFAULT_SESSION_TTL_SEC,
   SESSION_MAX_PER_TOKEN_LIMIT,
   resolveHeartbeatConfig,
@@ -132,9 +133,11 @@ describe("resolveSessionConfig", () => {
       maxPerToken: 5,
       idleSec: DEFAULT_SESSION_IDLE_SEC,
       rotateSec: DEFAULT_SESSION_ROTATE_SEC,
+      graceSec: DEFAULT_SESSION_ROTATE_GRACE_SEC,
     });
     expect(DEFAULT_SESSION_IDLE_SEC).toBe(3600);
     expect(DEFAULT_SESSION_ROTATE_SEC).toBe(900);
+    expect(DEFAULT_SESSION_ROTATE_GRACE_SEC).toBe(60);
     // A shorter ttl drags the defaults down instead of making them invalid.
     const short = resolveSessionConfig({ SESSION_TTL_SEC: "120" });
     expect([short.idleSec, short.rotateSec]).toEqual([120, 120]);
@@ -149,6 +152,24 @@ describe("resolveSessionConfig", () => {
   it("reads explicit idle and rotation windows", () => {
     const config = resolveSessionConfig({ SESSION_IDLE_SEC: "900", SESSION_ROTATE_SEC: "300" });
     expect([config.idleSec, config.rotateSec]).toEqual([900, 300]);
+  });
+
+  it("rejects an idle timeout shorter than 60 seconds (above the 25 s ping)", () => {
+    expect(() => resolveSessionConfig({ SESSION_IDLE_SEC: "59" })).toThrow(/SESSION_IDLE_SEC/);
+    expect(resolveSessionConfig({ SESSION_IDLE_SEC: "60" }).idleSec).toBe(60);
+  });
+
+  it("validates the rotation grace window", () => {
+    expect(resolveSessionConfig({}).graceSec).toBe(60);
+    expect(resolveSessionConfig({ SESSION_ROTATE_GRACE_SEC: "15" }).graceSec).toBe(15);
+    for (const value of ["0", "-1", "1.5", "abc"]) {
+      expect(() => resolveSessionConfig({ SESSION_ROTATE_GRACE_SEC: value })).toThrow(
+        /SESSION_ROTATE_GRACE_SEC/,
+      );
+    }
+    expect(() =>
+      resolveSessionConfig({ SESSION_TTL_SEC: "120", SESSION_ROTATE_GRACE_SEC: "121" }),
+    ).toThrow(/SESSION_ROTATE_GRACE_SEC/);
   });
 });
 

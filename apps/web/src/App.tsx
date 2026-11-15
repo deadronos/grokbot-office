@@ -40,6 +40,16 @@ export function App() {
     return startStream();
   }, [phase, startStream]);
 
+  useEffect(() => {
+    const unload = () => useOfficeStore.getState().setPageUnloading(true);
+    window.addEventListener("pagehide", unload);
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      window.removeEventListener("pagehide", unload);
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, []);
+
   return (
     <main className="app">
       <h1 className="app-title">{APP_NAME}</h1>

@@ -9,16 +9,13 @@ import { rotateSession, SESSION_COOKIE_NAME, sessionCookieOptions } from "./sess
 import type { TokenKind } from "./tokens.ts";
 import { extractBearerToken, hashToken, isAdminTokenUsable, secretsEqual } from "./tokens.ts";
 
-export type AppEnv = { Variables: { token: Token; limits: RateLimits } };
+export type AppEnv = { Variables: { token: Token; limits: RateLimits; session?: Session } };
 
-/** Every budget a viewer needs: idle cutoff and cookie-rotation age. */
-export type ViewerSessionPolicy = { idleSec: number; rotateSec: number };
+/** Every budget a viewer needs: idle cutoff, cookie-rotation age, and the previous-hash grace. */
+export type ViewerSessionPolicy = { idleSec: number; rotateSec: number; graceSec: number };
 
 /** One generic body for every auth failure, so a caller cannot probe which check failed. */
 function reject(c: Context<AppEnv>, status: 401 | 403, reason: string, tokenId?: string) {
-  // Failed auth burns IP budget first: the 429 wins so the password stays affordable to crack.
-  const limit = ipLimited(c);
-  if (limit) return limit;
   // Never log the token, its prefix/hash, or the Authorization header.
   console.warn("auth: token rejected", tokenId === undefined ? { reason } : { reason, tokenId });
   return c.json({ error: status === 401 ? "unauthorized" : "forbidden" }, status);
@@ -33,7 +30,7 @@ function tokenLimited(c: Context<AppEnv>, key: string): Response | undefined {
   return decision.allowed ? undefined : rateLimited(c, decision.retryAfterSec);
 }
 
-/** Costs one request against the caller's IP budget. */
+/** Costs one request against the caller's IP budget (no credentials at all). */
 export function ipLimited(c: Context<AppEnv>): Response | undefined {
   const limits = c.get("limits") as RateLimits | undefined;
   if (!limits) return;
@@ -41,17 +38,29 @@ export function ipLimited(c: Context<AppEnv>): Response | undefined {
   return decision.allowed ? undefined : rateLimited(c, decision.retryAfterSec);
 }
 
+/**
+ * Failed bearer/token attempts are counted *after* they fail, in a bucket of their
+ * own, so a flood of bad tokens cannot turn a valid or expired cookie into 429.
+ */
+function failedAuthLimited(c: Context<AppEnv>): Response | undefined {
+  const limits = c.get("limits") as RateLimits | undefined;
+  if (!limits) return;
+  const decision = limits.failedAuth(clientIp(c));
+  return decision.allowed ? undefined : rateLimited(c, decision.retryAfterSec);
+}
+
 export type ViewerValidation =
-  | { ok: true; token: Token | undefined; session: Session | undefined }
+  | { ok: true; token: Token | undefined; session: Session | undefined; via?: "current" | "prev" }
   | { ok: false; status: 401 | 403; reason: string; tokenId?: string };
 
 /**
  * Viewer auth for one credential pair: a bearer header decides alone, otherwise the
  * session cookie. Neither means no credentials. Pure, so the SSE stream can re-check
- * the very credential it opened with later (on every ping).
+ * a captured bearer, or look the session up by id, later (on every ping).
  *
  * A session is valid only while it exists, is unexpired, unrevoked, seen within
- * `idleSec`, and its viewer token still exists and is unrevoked.
+ * `idleSec`, and its viewer token still exists and is unrevoked. The previous cookie
+ * hash is accepted for `graceSec` after a rotation and must not itself trigger another.
  */
 export function validateViewer({
   repo,
@@ -60,6 +69,7 @@ export function validateViewer({
   secret,
   now,
   idleSec,
+  graceSec,
 }: {
   repo: Repo;
   adminToken: string | undefined;
@@ -67,6 +77,7 @@ export function validateViewer({
   secret: string | undefined;
   now: string;
   idleSec: number;
+  graceSec: number;
 }): ViewerValidation {
   if (header !== undefined) {
     const plaintext = extractBearerToken(header);
@@ -89,7 +100,11 @@ export function validateViewer({
 
   if (secret === undefined) return { ok: false, status: 401, reason: "missing credentials" };
 
-  const session = repo.findSessionByHash(hashToken(secret));
+  const hashed = hashToken(secret);
+  const current = repo.findSessionByHash(hashed);
+  const previous = current === undefined ? repo.findSessionByPrevHash(hashed) : undefined;
+  const session = current ?? previous;
+  const via = current !== undefined ? ("current" as const) : ("prev" as const);
   if (!session) return { ok: false, status: 401, reason: "unknown session" };
   if (session.revokedAt !== null) {
     return { ok: false, status: 401, reason: "revoked session", tokenId: session.tokenId };
@@ -101,11 +116,19 @@ export function validateViewer({
   if (session.lastSeenAt < toUtc(new Date(Date.parse(now) - idleSec * 1000))) {
     return { ok: false, status: 401, reason: "idle session", tokenId: session.tokenId };
   }
+  if (via === "prev") {
+    if (
+      session.rotatedAt === null ||
+      Date.parse(now) - Date.parse(session.rotatedAt) > graceSec * 1000
+    ) {
+      return { ok: false, status: 401, reason: "stale rotated session", tokenId: session.tokenId };
+    }
+  }
   const token = repo.getToken(session.tokenId);
   if (!token || token.revokedAt !== null) {
     return { ok: false, status: 401, reason: "revoked token", tokenId: session.tokenId };
   }
-  return { ok: true, token, session };
+  return { ok: true, token, session, via };
 }
 
 /**
@@ -116,15 +139,16 @@ export function validateViewer({
 export function requireAdmin({ adminToken }: { adminToken: string | undefined }) {
   return createMiddleware<AppEnv>(async (c, next) => {
     if (!isAdminTokenUsable(adminToken)) {
-      return ipLimited(c) ?? c.json({ error: "admin token is not configured" }, 503);
+      return failedAuthLimited(c) ?? c.json({ error: "admin token is not configured" }, 503);
     }
     const header = c.req.header("authorization");
-    if (!header) return ipLimited(c) ?? c.json({ error: "missing bearer token" }, 401);
+    if (!header) return failedAuthLimited(c) ?? c.json({ error: "missing bearer token" }, 401);
     const token = extractBearerToken(header);
-    if (!token) return ipLimited(c) ?? c.json({ error: "malformed authorization header" }, 401);
+    if (!token)
+      return failedAuthLimited(c) ?? c.json({ error: "malformed authorization header" }, 401);
     // Whitespace around a pasted token is a copy/paste artefact, not a different secret.
     if (!secretsEqual(token, adminToken.trim())) {
-      return ipLimited(c) ?? c.json({ error: "invalid token" }, 401);
+      return failedAuthLimited(c) ?? c.json({ error: "invalid token" }, 401);
     }
     // One budget for the env token; it has no DB row to key on.
     const limit = tokenLimited(c, "admin");
@@ -155,22 +179,23 @@ export function requireToken({
   return createMiddleware<AppEnv>(async (c, next) => {
     const header = c.req.header("authorization");
     const plaintext = extractBearerToken(header);
-    if (!header) return reject(c, 401, "missing header");
-    if (!plaintext) return reject(c, 401, "malformed header");
+    if (!header) return failedAuthLimited(c) ?? reject(c, 401, "missing header");
+    if (!plaintext) return failedAuthLimited(c) ?? reject(c, 401, "malformed header");
     if (
       adminToken !== undefined &&
       isAdminTokenUsable(adminToken) &&
       secretsEqual(plaintext, adminToken.trim())
     ) {
-      return reject(c, 403, "admin token");
+      return failedAuthLimited(c) ?? reject(c, 403, "admin token");
     }
 
     const token = repo.findTokenByHash(hashToken(plaintext));
-    if (!token) return reject(c, 401, "unknown token");
-    if (token.revokedAt) return reject(c, 401, "revoked token", token.id);
-    if (token.kind !== kind) return reject(c, 403, "wrong token kind", token.id);
+    if (!token) return failedAuthLimited(c) ?? reject(c, 401, "unknown token");
+    if (token.revokedAt) return failedAuthLimited(c) ?? reject(c, 401, "revoked token", token.id);
+    if (token.kind !== kind)
+      return failedAuthLimited(c) ?? reject(c, 403, "wrong token kind", token.id);
     if (kind === "bot" && botIdParam && token.botId !== c.req.param(botIdParam)) {
-      return reject(c, 403, "token bound to another bot", token.id);
+      return failedAuthLimited(c) ?? reject(c, 403, "token bound to another bot", token.id);
     }
 
     const limit = tokenLimited(c, token.id);
@@ -187,7 +212,8 @@ export function requireToken({
  *
  * Cookie requests count against their viewer token's budget, refresh `last_seen_at`,
  * and — unless `rotate: false`, as the SSE stream and its pings use — swap in a new
- * secret once the cookie is older than `policy.rotateSec`.
+ * secret once the cookie is older than `policy.rotateSec`. A request that presents
+ * the previous hash during the grace window is accepted and does not rotate again.
  */
 export function requireViewer({
   repo,
@@ -202,15 +228,25 @@ export function requireViewer({
 }) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const now = nowUtc();
+    const header = c.req.header("authorization");
+    const secret = getCookie(c, SESSION_COOKIE_NAME);
     const result = validateViewer({
       repo,
       adminToken,
-      header: c.req.header("authorization"),
-      secret: getCookie(c, SESSION_COOKIE_NAME),
+      header,
+      secret,
       now,
       idleSec: policy.idleSec,
+      graceSec: policy.graceSec,
     });
-    if (!result.ok) return reject(c, result.status, result.reason, result.tokenId);
+    if (!result.ok) {
+      // Only bearer/token attempts use the failed-auth bucket, and only after they fail.
+      if (header !== undefined)
+        return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
+      if (secret === undefined)
+        return ipLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
+      return reject(c, result.status, result.reason, result.tokenId);
+    }
 
     const limit = tokenLimited(c, result.token?.id ?? result.session?.tokenId ?? "admin");
     if (limit) return limit;
@@ -221,13 +257,24 @@ export function requireViewer({
     }
     if (result.session) {
       repo.touchSession(result.session.id, now);
+      c.set("session", result.session);
       // A stream cannot read a new cookie mid-connection, so it never rotates.
+      // The previous hash is accepted during the grace window and must not chain.
+      const pivot = result.session.rotatedAt ?? result.session.createdAt;
       if (
         rotate &&
-        Date.parse(now) - Date.parse(result.session.createdAt) > policy.rotateSec * 1000
+        result.via === "current" &&
+        Date.parse(now) - Date.parse(pivot) > policy.rotateSec * 1000
       ) {
         const rotated = rotateSession(repo, result.session, now);
-        setCookie(c, SESSION_COOKIE_NAME, rotated.secret, sessionCookieOptions(rotated.maxAgeSec));
+        if (rotated) {
+          setCookie(
+            c,
+            SESSION_COOKIE_NAME,
+            rotated.secret,
+            sessionCookieOptions(rotated.maxAgeSec),
+          );
+        }
       }
     }
     await next();

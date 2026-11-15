@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "96fef4bc-aa64-43f3-8b41-40be79a11ebd",
+  "id": "e10da6cc-6f88-4e6f-b5bf-ca5b4781eadc",
   "prevId": "36e883da-1ce6-4110-9ace-09e9e3656578",
   "tables": {
     "bot_status": {
@@ -567,6 +567,20 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "prev_token_hash": {
+          "name": "prev_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "rotated_at": {
+          "name": "rotated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -574,6 +588,13 @@
           "name": "sessions_token_hash_unique",
           "columns": [
             "token_hash"
+          ],
+          "isUnique": true
+        },
+        "sessions_prev_token_hash_unique": {
+          "name": "sessions_prev_token_hash_unique",
+          "columns": [
+            "prev_token_hash"
           ],
           "isUnique": true
         },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createRateLimits } from "./rate-limit.ts";
+import { TokenBuckets, createRateLimits } from "./rate-limit.ts";
 
 const ALLOW = { allowed: true };
 
@@ -37,5 +37,22 @@ describe("TokenBuckets", () => {
       expect(decision.allowed).toBe(false);
       if (!decision.allowed) expect(decision.retryAfterSec).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it("evicts the oldest keys once the map hits its cap", () => {
+    const buckets = new TokenBuckets(() => 0, { maxKeys: 2 });
+    expect(buckets.take("a", 1, 60).allowed).toBe(true);
+    expect(buckets.take("b", 1, 60).allowed).toBe(true);
+    expect(buckets.take("c", 1, 60).allowed).toBe(true);
+    expect(buckets.size).toBe(2);
+    // "a" was evicted, so it starts a fresh burst.
+    expect(buckets.take("a", 1, 60).allowed).toBe(true);
+  });
+
+  it("keeps failed-auth budgets apart from general unauthenticated IP traffic", () => {
+    const limits = createRateLimits({ perMin: 60, burst: 1, ipPerMin: 30, ipBurst: 1 });
+    expect(limits.failedAuth("10.0.0.1")).toEqual(ALLOW);
+    expect(limits.failedAuth("10.0.0.1").allowed).toBe(false);
+    expect(limits.ip("10.0.0.1")).toEqual(ALLOW);
   });
 });

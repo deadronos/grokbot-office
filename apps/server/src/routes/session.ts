@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 import type { AppEnv } from "../auth/middleware.ts";
-import { ipLimited, requireToken } from "../auth/middleware.ts";
+import { requireToken } from "../auth/middleware.ts";
 import { guardCookieMutation } from "../auth/csrf.ts";
 import { createSession, SESSION_COOKIE_NAME, sessionCookieOptions } from "../auth/session.ts";
 import { hashToken } from "../auth/tokens.ts";
@@ -53,8 +53,7 @@ export function sessionRoutes({
   api.post("/logout", (c) => {
     const refused = guardCookieMutation(c, corsOrigins);
     if (refused) return refused;
-    const limited = ipLimited(c);
-    if (limited) return limited;
+    // Logout is never rate-limited: a bad-token flood must not leave a valid cookie in place.
     const secret = getCookie(c, SESSION_COOKIE_NAME);
     if (secret !== undefined) {
       const session = repo.findSessionByHash(hashToken(secret));

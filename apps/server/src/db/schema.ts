@@ -152,9 +152,13 @@ export const sessions = sqliteTable(
     lastSeenAt: text("last_seen_at").notNull(),
     expiresAt: text("expires_at").notNull(),
     revokedAt: text("revoked_at"),
+    // Previous cookie hash, kept valid for SESSION_ROTATE_GRACE_SEC after a rotation.
+    prevTokenHash: text("prev_token_hash"),
+    rotatedAt: text("rotated_at"),
   },
   (t) => [
     uniqueIndex("sessions_token_hash_unique").on(t.tokenHash),
+    uniqueIndex("sessions_prev_token_hash_unique").on(t.prevTokenHash),
     index("sessions_token_id_idx").on(t.tokenId),
   ],
 );

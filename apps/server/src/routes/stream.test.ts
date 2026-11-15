@@ -386,6 +386,31 @@ describe("GET /api/stream keepalive", () => {
     expect(res.headers.getSetCookie()).toHaveLength(0);
     await res.body?.cancel();
   });
+
+  it("keeps an open stream alive after the cookie rotates, and ends it on revoke", async () => {
+    const { app, db, viewerToken, hub } = setup({ pingIntervalMs: 15 });
+    const cookie = await sessionCookie(app, viewerToken);
+    const sse = new Sse(await open(app, { cookie }));
+    expect(hub.size()).toBe(1);
+
+    db.prepare("update sessions set created_at = ?").run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    const rotated = await app.request("/api/state", { headers: { cookie } });
+    expect(rotated.status).toBe(200);
+    expect(
+      rotated.headers.getSetCookie().some((value) => value.startsWith(`${SESSION_COOKIE_NAME}=`)),
+    ).toBe(true);
+
+    // A ping after the rotation must still arrive; re-checking the opening secret would end us.
+    const frame = await sse.next();
+    expect(frame).toEqual({ event: "ping", data: "{}" });
+    expect(hub.size()).toBe(1);
+
+    db.prepare("update sessions set revoked_at = ?").run(new Date().toISOString());
+    await sse.ended();
+    expect(hub.size()).toBe(0);
+  });
 });
 
 describe("GET /api/stream lifecycle", () => {

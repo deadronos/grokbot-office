@@ -1,15 +1,13 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { getCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
 import type { AppEnv } from "../auth/middleware.ts";
 import { requireViewer, validateViewer, type ViewerSessionPolicy } from "../auth/middleware.ts";
-import { SESSION_COOKIE_NAME } from "../auth/session.ts";
 import type { Repo } from "../db/repo.ts";
 import type { StreamHub } from "../stream/hub.ts";
-import { nowUtc } from "../time.ts";
+import { nowUtc, toUtc } from "../time.ts";
 import { toStreamEvent } from "./mappers.ts";
 
 /** One drain page; the same cap as the replay endpoint's largest page. */
@@ -88,9 +86,10 @@ export function streamRoutes({
       return c.json({ error: "too many streams" }, 503);
     }
 
-    // Captured once: every ping re-checks the very credential the stream opened with.
+    // Captured once. Cookie streams are re-checked by session id so a rotation
+    // cannot kill the open connection; bearer streams still re-check the header.
     const header = c.req.header("authorization");
-    const secret = getCookie(c, SESSION_COOKIE_NAME);
+    const sessionId = c.get("session")?.id;
     // A cursor past the newest event (e.g. after a DB reset) is clamped to it, so the
     // client goes live instead of waiting for ids it will never see.
     const latest = repo.lastEventSeq();
@@ -163,20 +162,39 @@ export function streamRoutes({
       timer = setInterval(() => {
         if (stopped) return;
         // A session can expire, go idle or be revoked, and a token can die: pings are the check.
-        const check = validateViewer({
-          repo,
-          adminToken,
-          header,
-          secret,
-          now: nowUtc(),
-          idleSec: policy.idleSec,
-        });
-        if (!check.ok) {
-          stop();
-          return;
+        const now = nowUtc();
+        if (sessionId !== undefined) {
+          const session = repo.getSession(sessionId);
+          const idleCutoff = toUtc(new Date(Date.parse(now) - policy.idleSec * 1000));
+          const token = session ? repo.getToken(session.tokenId) : undefined;
+          if (
+            !session ||
+            session.revokedAt !== null ||
+            session.expiresAt <= now ||
+            session.lastSeenAt < idleCutoff ||
+            !token ||
+            token.revokedAt !== null
+          ) {
+            stop();
+            return;
+          }
+          // An open stream is activity: a live tab with a stream never goes idle (intended).
+          repo.touchSession(session.id, now);
+        } else {
+          const check = validateViewer({
+            repo,
+            adminToken,
+            header,
+            secret: undefined,
+            now,
+            idleSec: policy.idleSec,
+            graceSec: policy.graceSec,
+          });
+          if (!check.ok) {
+            stop();
+            return;
+          }
         }
-        // An open stream is activity: without this an idle viewer's cookie dies under it.
-        if (check.session) repo.touchSession(check.session.id, nowUtc());
         stream.writeSSE({ event: "ping", data: "{}" }).catch(stop);
       }, config.pingIntervalMs);
 

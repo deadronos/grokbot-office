@@ -6,21 +6,36 @@ export type RateLimitDecision = { allowed: true } | { allowed: false; retryAfter
 
 type Bucket = { tokens: number; at: number };
 
+/** Default cap on in-memory keys; evicts the oldest `at` when a new key would exceed it. */
+export const DEFAULT_RATE_LIMIT_MAX_KEYS = 10_000;
+
 /**
  * In-process token buckets: `burst` requests at once, then one more every `60 / perMin`
  * seconds. Injectable clock so tests can run short windows without waiting.
  *
- * shortcut: the map is never swept; keys are loopback IPs and token ids, so it stays
- * about as large as the token table. Add eviction if this ever runs a real proxy.
+ * The map is swept on access: when it would grow past `maxKeys`, the oldest bucket is dropped.
  */
 export class TokenBuckets {
   private readonly buckets = new Map<string, Bucket>();
+  private readonly maxKeys: number;
 
-  constructor(private readonly clock: () => number = Date.now) {}
+  constructor(
+    private readonly clock: () => number = Date.now,
+    options: { maxKeys?: number } = {},
+  ) {
+    this.maxKeys = options.maxKeys ?? DEFAULT_RATE_LIMIT_MAX_KEYS;
+  }
+
+  get size(): number {
+    return this.buckets.size;
+  }
 
   take(key: string, burst: number, perMin: number): RateLimitDecision {
     const at = this.clock();
     const perSec = perMin / 60;
+    if (!this.buckets.has(key) && this.buckets.size >= this.maxKeys) {
+      this.evictOldest();
+    }
     const bucket = this.buckets.get(key) ?? { tokens: burst, at };
     const tokens = Math.min(burst, bucket.tokens + ((at - bucket.at) / 1000) * perSec);
     if (tokens < 1) {
@@ -30,22 +45,37 @@ export class TokenBuckets {
     this.buckets.set(key, { tokens: tokens - 1, at });
     return { allowed: true };
   }
+
+  private evictOldest(): void {
+    let oldestKey: string | undefined;
+    let oldestAt = Infinity;
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.at < oldestAt) {
+        oldestAt = bucket.at;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey !== undefined) this.buckets.delete(oldestKey);
+  }
 }
 
-/** The two budgets: per authenticated token (or session) and per unauthenticated IP. */
+/** The budgets: per authenticated token, per unauthenticated IP, and failed bearer attempts. */
 export type RateLimits = {
   token: (key: string) => RateLimitDecision;
   ip: (key: string) => RateLimitDecision;
+  failedAuth: (key: string) => RateLimitDecision;
 };
 
 export function createRateLimits(
   config: RateLimitConfig,
   clock: () => number = Date.now,
+  options: { maxKeys?: number } = {},
 ): RateLimits {
-  const buckets = new TokenBuckets(clock);
+  const buckets = new TokenBuckets(clock, options);
   return {
     token: (key) => buckets.take(`token:${key}`, config.burst, config.perMin),
     ip: (key) => buckets.take(`ip:${key}`, config.ipBurst, config.ipPerMin),
+    failedAuth: (key) => buckets.take(`failed:${key}`, config.ipBurst, config.ipPerMin),
   };
 }
 

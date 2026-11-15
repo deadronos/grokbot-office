@@ -102,6 +102,7 @@ function resetStore(): void {
     connection: "reconnecting",
     pending: false,
     error: null,
+    pageUnloading: false,
   });
 }
 
@@ -385,6 +386,22 @@ describe("stream", () => {
     expect(state.bots).toEqual({});
     expect(state.lastEventSeq).toBe(0);
     expect(state.error).toBeNull();
+  });
+
+  it("does not probe the session when the page is unloading", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    fetchMock.mockClear();
+    const source = startStream();
+    source.emit("open");
+
+    useOfficeStore.getState().setPageUnloading(true);
+    source.emit("error");
+    await Promise.resolve();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useOfficeStore.getState().phase).toBe("ready");
+    expect(source.closed).toBe(false);
   });
 
   it("re-renders one bot without touching the others", async () => {

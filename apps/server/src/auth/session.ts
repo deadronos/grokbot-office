@@ -43,6 +43,8 @@ export function createSession(
       lastSeenAt: now,
       expiresAt,
       revokedAt: null,
+      prevTokenHash: null,
+      rotatedAt: null,
     },
     maxPerToken,
     now,
@@ -59,9 +61,13 @@ export function rotateSession(
   repo: Repo,
   session: Session,
   now: string,
-): { secret: string; maxAgeSec: number } {
+): { secret: string; maxAgeSec: number } | undefined {
   const secret = randomBytes(SESSION_SECRET_BYTES).toString("base64url");
-  repo.replaceSessionSecret(session.id, hashToken(secret), now);
+  // Compare-and-swap on the current hash: a lost race leaves the previous hash valid
+  // for the grace window, and this caller must not Set-Cookie a secret it did not store.
+  if (!repo.rotateSessionCas(session.id, session.tokenHash, hashToken(secret), now)) {
+    return undefined;
+  }
   const remainingSec = Math.ceil((Date.parse(session.expiresAt) - Date.parse(now)) / 1000);
   return { secret, maxAgeSec: Math.max(1, remainingSec) };
 }

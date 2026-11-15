@@ -31,7 +31,7 @@ const webDist = process.env.WEB_DIST ?? fileURLToPath(new URL("../../web/dist", 
 const heartbeat = resolveHeartbeatConfig(process.env);
 const retentionDays = resolveRetentionDays(process.env);
 const session = resolveSessionConfig(process.env);
-const limits = createRateLimits(resolveRateLimitConfig(process.env));
+const rateLimitConfig = resolveRateLimitConfig(process.env);
 const corsOrigins = resolveCorsOrigins(process.env);
 const tailnetOnly = resolveViewerTailnetOnly(process.env);
 const port = resolvePort(process.env);
@@ -66,7 +66,7 @@ if (tailnetOnly) {
       heartbeat,
       hub,
       session,
-      limits,
+      limits: createRateLimits(rateLimitConfig),
       corsOrigins,
       surface: "bot",
     }),
@@ -80,7 +80,7 @@ if (tailnetOnly) {
       heartbeat,
       hub,
       session,
-      limits,
+      limits: createRateLimits(rateLimitConfig),
       corsOrigins,
       surface: "viewer",
       webDist: existsSync(webDist) ? webDist : undefined,
@@ -96,7 +96,7 @@ if (tailnetOnly) {
       heartbeat,
       hub,
       session,
-      limits,
+      limits: createRateLimits(rateLimitConfig),
       corsOrigins,
       webDist: existsSync(webDist) ? webDist : undefined,
     }),
