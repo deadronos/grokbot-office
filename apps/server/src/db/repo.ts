@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { and, asc, desc, eq, gt, isNull, lt, notInArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
@@ -218,20 +218,42 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     getEventsPage: (seq, limit) =>
       db.transaction((tx) => {
         const hiddenIds = hiddenBotIds(tx);
+        const rows = tx
+          .select()
+          .from(events)
+          .where(
+            and(
+              gt(events.seq, seq),
+              notInArray(events.botId, hiddenIds),
+              or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
+            ),
+          )
+          .orderBy(events.seq)
+          .limit(limit + 1)
+          .all();
+        // A handoff id names the hidden sender's handoff, so scrub it at read time:
+        // un-hiding the sender brings it back, and the stored row stays untouched.
+        const pageHandoffIds = [
+          ...new Set(rows.flatMap((row) => (row.handoffId === null ? [] : [row.handoffId]))),
+        ];
+        const hiddenHandoffIds = new Set(
+          pageHandoffIds.length === 0
+            ? []
+            : tx
+                .select({ id: handoffs.id })
+                .from(handoffs)
+                .where(
+                  and(inArray(handoffs.id, pageHandoffIds), inArray(handoffs.fromBotId, hiddenIds)),
+                )
+                .all()
+                .map((handoff) => handoff.id),
+        );
         return {
-          rows: tx
-            .select()
-            .from(events)
-            .where(
-              and(
-                gt(events.seq, seq),
-                notInArray(events.botId, hiddenIds),
-                or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
-              ),
-            )
-            .orderBy(events.seq)
-            .limit(limit + 1)
-            .all(),
+          rows: rows.map((row) =>
+            row.handoffId !== null && hiddenHandoffIds.has(row.handoffId)
+              ? { ...row, handoffId: null }
+              : row,
+          ),
           lastSeq: lastEventSeq(tx),
         };
       }),
@@ -377,11 +399,22 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   .set({ state: "accepted", acceptedAt: now })
                   .where(eq(handoffs.id, handoff.id))
                   .run();
+                const fromHidden = tx
+                  .select({ hidden: bots.hidden })
+                  .from(bots)
+                  .where(eq(bots.id, handoff.fromBotId))
+                  .get();
                 change({
                   status: "working",
                   // The receiver now works on the handed-off task, not whatever it had before.
                   taskId: input.taskId ?? null,
-                  label: handoff.label ?? input.label ?? null,
+                  // A hidden sender's handoff label never reaches viewers: the receiver shows
+                  // its own label or none, never a placeholder. Status is current state, so
+                  // un-hiding the sender later does not restore the old label.
+                  label:
+                    fromHidden?.hidden === true
+                      ? (input.label ?? null)
+                      : (handoff.label ?? input.label ?? null),
                   handoffTo: null,
                   handoffId: null,
                 });

@@ -58,3 +58,53 @@ export function testSetup({
 }
 
 export const adminHeaders = (token = TEST_ADMIN_TOKEN) => ({ authorization: `Bearer ${token}` });
+
+export type SseFrame = { event: string; data: string; id?: string };
+
+/** Reads SSE frames out of a streaming Response (the `/api/stream` tests). */
+export class Sse {
+  private reader: ReadableStreamDefaultReader<Uint8Array>;
+  private buffer = "";
+  private decoder = new TextDecoder();
+
+  constructor(res: Response) {
+    if (res.body === null) throw new Error("stream response has no body");
+    this.reader = res.body.getReader();
+  }
+
+  async next(): Promise<SseFrame> {
+    for (;;) {
+      const end = this.buffer.indexOf("\n\n");
+      if (end !== -1) {
+        const block = this.buffer.slice(0, end);
+        this.buffer = this.buffer.slice(end + 2);
+        const frame: SseFrame = { event: "", data: "" };
+        for (const line of block.split("\n")) {
+          const colon = line.indexOf(":");
+          if (colon === -1) continue;
+          const field = line.slice(0, colon);
+          const value = line.slice(colon + 1).replace(/^ /, "");
+          if (field === "event") frame.event = value;
+          if (field === "data") frame.data = frame.data === "" ? value : `${frame.data}\n${value}`;
+          if (field === "id") frame.id = value;
+        }
+        return frame;
+      }
+      const chunk = await this.reader.read();
+      if (chunk.done) throw new Error("stream ended before a frame");
+      this.buffer += this.decoder.decode(chunk.value, { stream: true });
+    }
+  }
+
+  /** Resolves once the server ends the stream, dropping any queued frames. */
+  async ended(): Promise<void> {
+    for (;;) {
+      const chunk = await this.reader.read();
+      if (chunk.done) return;
+    }
+  }
+
+  cancel(): Promise<void> {
+    return this.reader.cancel();
+  }
+}

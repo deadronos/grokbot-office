@@ -93,10 +93,10 @@ export function streamRoutes({
       let again = false;
       let stopped = false;
       let timer: ReturnType<typeof setInterval> | undefined;
-      let finish = () => {};
+      let resolveEnded: (() => void) | undefined;
 
       const ended = new Promise<void>((resolve) => {
-        finish = resolve;
+        resolveEnded = resolve;
       });
 
       const stop = () => {
@@ -104,7 +104,7 @@ export function streamRoutes({
         stopped = true;
         clearInterval(timer);
         hub.remove(client);
-        finish();
+        resolveEnded?.();
       };
 
       /** Serialized per client: a notify during a drain runs one more drain afterwards. */
@@ -135,7 +135,8 @@ export function streamRoutes({
                 break;
               }
             }
-          } while (again && !stopped);
+            // A notify during a drain sets `again`; a stopped stream returns above.
+          } while (again);
         } finally {
           draining = false;
         }
@@ -156,13 +157,14 @@ export function streamRoutes({
           stop();
           return;
         }
-        void stream.writeSSE({ event: "ping", data: "{}" });
+        stream.writeSSE({ event: "ping", data: "{}" }).catch(stop);
       }, config.pingIntervalMs);
 
       // Replay (or catch up) and then stay open until a ping, an abort or shutdown ends us.
       // The finally keeps the hub and the timer clean even if a write or the DB throws.
       try {
-        await drain();
+        // A failed drain (write or DB) ends the stream instead of rejecting nowhere.
+        await drain().catch(stop);
         await ended;
       } finally {
         stop();

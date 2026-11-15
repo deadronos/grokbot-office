@@ -147,13 +147,13 @@ describe("POST /api/session", () => {
   });
 });
 
-describe("session cookie auth", () => {
-  async function sessionOf(app: App, viewerToken: string) {
-    const res = await postSession(app, viewerToken);
-    expect(res.status).toBe(201);
-    return sessionCookie(res).secret;
-  }
+async function sessionOf(app: App, viewerToken: string) {
+  const res = await postSession(app, viewerToken);
+  expect(res.status).toBe(201);
+  return sessionCookie(res).secret;
+}
 
+describe("session cookie auth", () => {
   it("authenticates viewer reads on state and events", async () => {
     const { app, viewer } = setup();
     const cookie = cookieHeader(await sessionOf(app, viewer.token));

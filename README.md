@@ -261,6 +261,13 @@ events that hand off to it, or open handoffs from or to it. The flag is read at 
 time, so un-hiding a bot shows its history again. `lastSeq` / `lastEventSeq` stay the
 global high-water mark, hidden events included, so `seq` has gaps for viewers.
 
+A visible bot accepting a handoff from a hidden sender leaks nothing from that side: the
+`handoff_accepted` event keeps its `handoffId` in the database but the replay and the
+live stream omit it while the sender stays hidden (read time, so un-hiding restores it),
+and the receiver's status label comes from the accept event's own `label` or stays
+absent — never the hidden handoff's label and never a placeholder (write time, so
+un-hiding does not bring the old label back).
+
 `GET /api/events?since={seq}&limit={n}` replays the log: events with `seq > since`
 ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
 500). Values are plain decimal integers without leading zeros (`since=00` and

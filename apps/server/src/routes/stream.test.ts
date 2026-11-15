@@ -4,7 +4,7 @@ import { StreamEvent } from "@grokbot-office/shared";
 
 import { SESSION_COOKIE_NAME } from "../auth/session.ts";
 import { issueToken } from "../auth/tokens.ts";
-import { NOW, botRecord, testSetup } from "../test-utils.ts";
+import { NOW, Sse, botRecord, testSetup } from "../test-utils.ts";
 import type { StreamConfig } from "./stream.ts";
 
 const cleanups: (() => void)[] = [];
@@ -44,56 +44,6 @@ const post = (app: App, token: string, batch: object[]) =>
 
 const open = (app: App, headers: Record<string, string>, path = "/api/stream") =>
   app.request(path, { headers });
-
-type Frame = { event: string; data: string; id?: string };
-
-/** Reads SSE frames out of a streaming Response. */
-class Sse {
-  private reader: ReadableStreamDefaultReader<Uint8Array>;
-  private buffer = "";
-  private decoder = new TextDecoder();
-
-  constructor(res: Response) {
-    if (res.body === null) throw new Error("stream response has no body");
-    this.reader = res.body.getReader();
-  }
-
-  async next(): Promise<Frame> {
-    for (;;) {
-      const end = this.buffer.indexOf("\n\n");
-      if (end !== -1) {
-        const block = this.buffer.slice(0, end);
-        this.buffer = this.buffer.slice(end + 2);
-        const frame: Frame = { event: "", data: "" };
-        for (const line of block.split("\n")) {
-          const colon = line.indexOf(":");
-          if (colon === -1) continue;
-          const field = line.slice(0, colon);
-          const value = line.slice(colon + 1).replace(/^ /, "");
-          if (field === "event") frame.event = value;
-          if (field === "data") frame.data = frame.data === "" ? value : `${frame.data}\n${value}`;
-          if (field === "id") frame.id = value;
-        }
-        return frame;
-      }
-      const chunk = await this.reader.read();
-      if (chunk.done) throw new Error("stream ended before a frame");
-      this.buffer += this.decoder.decode(chunk.value, { stream: true });
-    }
-  }
-
-  /** Resolves once the server ends the stream, dropping any queued frames. */
-  async ended(): Promise<void> {
-    for (;;) {
-      const chunk = await this.reader.read();
-      if (chunk.done) return;
-    }
-  }
-
-  cancel(): Promise<void> {
-    return this.reader.cancel();
-  }
-}
 
 async function until(check: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
@@ -211,19 +161,19 @@ describe("GET /api/stream query", () => {
   });
 });
 
-describe("GET /api/stream hidden bots", () => {
-  function hiddenSetup(stream: Partial<StreamConfig> = {}) {
-    const context = setup(stream);
-    context.repo.upsertBot({ ...botRecord("ghost"), hidden: true });
-    const ghostEvents = (n: number, extra: Record<string, unknown> = {}) =>
-      context.repo.applyEvents(
-        "ghost",
-        [{ botId: "ghost", eventId: ulid(n), type: "status_changed", ...extra }] as never,
-        NOW,
-      );
-    return { ...context, ghostEvents };
-  }
+function hiddenSetup(stream: Partial<StreamConfig> = {}) {
+  const context = setup(stream);
+  context.repo.upsertBot({ ...botRecord("ghost"), hidden: true });
+  const ghostEvents = (n: number, extra: Record<string, unknown> = {}) =>
+    context.repo.applyEvents(
+      "ghost",
+      [{ botId: "ghost", eventId: ulid(n), type: "status_changed", ...extra }] as never,
+      NOW,
+    );
+  return { ...context, ghostEvents };
+}
 
+describe("GET /api/stream hidden bots", () => {
   it("does not stream events a hidden bot sends", async () => {
     const { app, viewerToken, dataToken, ghostEvents } = hiddenSetup();
     const sse = new Sse(await open(app, auth(viewerToken)));
