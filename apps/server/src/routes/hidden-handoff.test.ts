@@ -150,6 +150,44 @@ describe("handoff_accepted label (read time)", () => {
     expect(res.status).toBe(200);
     expect(await snapshotLabel(app, viewerToken, "data")).toBe("own");
   });
+
+  it("keeps the hidden-source label when a later status_changed omits one", async () => {
+    const { app, repo, dataToken, viewerToken } = setup();
+    expect((await accept(app, dataToken)).status).toBe(200);
+    expect(repo.getBotStatus("data")).toMatchObject({
+      label: "classified",
+      labelHandoffId: "h-secret",
+    });
+    expect(await snapshotLabel(app, viewerToken, "data")).toBeUndefined();
+
+    const res = await app.request("/api/events", {
+      method: "POST",
+      headers: { ...auth(dataToken), "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [
+          {
+            botId: "data",
+            eventId: ulid(3),
+            type: "status_changed",
+            status: "working",
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    // Stored label and its source stay, so the scrub still applies and un-hide restores it.
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "working",
+      label: "classified",
+      labelHandoffId: "h-secret",
+    });
+    expect(await snapshotLabel(app, viewerToken, "data")).toBeUndefined();
+    const raw = await (await app.request("/api/state", { headers: auth(viewerToken) })).text();
+    expect(raw).not.toContain("classified");
+
+    repo.updateBot("ghost", { hidden: false });
+    expect(await snapshotLabel(app, viewerToken, "data")).toBe("classified");
+  });
 });
 
 describe("hidden handoff scrub", () => {

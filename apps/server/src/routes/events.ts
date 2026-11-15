@@ -78,9 +78,10 @@ export function eventRoutes({
     c.header("Cache-Control", "no-store");
     return c.json({
       events,
-      // Hidden bots' events leave gaps in `seq`. Once nothing visible is left the
-      // cursor jumps to the high-water mark, so a client never re-reads a hidden run.
-      nextSince: hasMore ? events[events.length - 1].seq : Math.max(query.since, lastSeq),
+      // Hidden bots' events leave gaps in `seq`, and a `since` past the newest event
+      // is clamped to the high-water mark (like the stream cursor), so a client never
+      // waits for ids it will never see.
+      nextSince: hasMore ? events[events.length - 1].seq : lastSeq,
       hasMore,
       lastSeq,
     });

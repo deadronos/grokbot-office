@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StreamEvent } from "@grokbot-office/shared";
 
@@ -9,6 +9,7 @@ import type { StreamConfig } from "./stream.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const close of cleanups.splice(0)) close();
 });
 
@@ -300,6 +301,21 @@ describe("GET /api/stream hidden bots", () => {
 });
 
 describe("GET /api/stream keepalive", () => {
+  it("does not leak the ping timer when the stream aborts before the open frame", async () => {
+    vi.useFakeTimers();
+    const { app, viewerToken, hub } = setup({ pingIntervalMs: 1000 });
+    const res = await app.request("/api/stream", { headers: auth(viewerToken) });
+    expect(res.status).toBe(200);
+
+    // Cancel without reading: the opening write is still pending, so `stop()` runs
+    // before the interval exists and must still be able to clear it.
+    await res.body?.cancel();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(hub.size()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("pings with a bare event and no data of its own", async () => {
     const { app, viewerToken } = setup({ pingIntervalMs: 10 });
     const sse = new Sse(await open(app, auth(viewerToken)));

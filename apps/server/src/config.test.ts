@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_INTERVAL_SEC,
   DEFAULT_HEARTBEAT_TIMEOUT_SEC,
+  DEFAULT_RETENTION_DAYS,
+  RETENTION_DAYS_MAX,
   DEFAULT_SESSION_TTL_SEC,
   resolveHeartbeatConfig,
+  resolveRetentionDays,
   resolveSessionTtlSec,
   SESSION_TTL_MAX_SEC,
 } from "./config.ts";
@@ -46,6 +49,31 @@ describe("resolveHeartbeatConfig", () => {
     expect(() =>
       resolveHeartbeatConfig({ HEARTBEAT_INTERVAL_SEC: "300", HEARTBEAT_TIMEOUT_SEC: "60" }),
     ).toThrow(/must be greater than HEARTBEAT_INTERVAL_SEC/);
+  });
+});
+
+describe("resolveRetentionDays", () => {
+  it("falls back to ninety days", () => {
+    expect(DEFAULT_RETENTION_DAYS).toBe(90);
+    expect(resolveRetentionDays({})).toBe(90);
+    expect(resolveRetentionDays({ RETENTION_DAYS: " " })).toBe(90);
+  });
+
+  it("reads an override and trims it", () => {
+    expect(resolveRetentionDays({ RETENTION_DAYS: " 30 " })).toBe(30);
+  });
+
+  it("rejects values that are not positive integers", () => {
+    for (const value of ["0", "-5", "1.5", "abc", "1e3", "Infinity"]) {
+      expect(() => resolveRetentionDays({ RETENTION_DAYS: value })).toThrow(/RETENTION_DAYS/);
+    }
+  });
+
+  it("caps retention at 36500 days and rejects anything larger at startup", () => {
+    expect(RETENTION_DAYS_MAX).toBe(36500);
+    expect(resolveRetentionDays({ RETENTION_DAYS: "36500" })).toBe(36500);
+    expect(() => resolveRetentionDays({ RETENTION_DAYS: "36501" })).toThrow(/RETENTION_DAYS/);
+    expect(() => resolveRetentionDays({ RETENTION_DAYS: "200000000" })).toThrow(/RETENTION_DAYS/);
   });
 });
 

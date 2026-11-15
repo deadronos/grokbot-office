@@ -10,6 +10,11 @@ export const DEFAULT_SESSION_TTL_SEC = 28800;
 /** A week: beyond this a viewer cookie outlives any reason to keep it. */
 export const SESSION_TTL_MAX_SEC = 604800;
 
+/** Event and closed-handoff retention; the nightly prune drops older rows. */
+export const DEFAULT_RETENTION_DAYS = 90;
+/** A century: beyond this the prune cutoff overflows a JS Date. */
+export const RETENTION_DAYS_MAX = 36500;
+
 function positiveInt(raw: string | undefined, fallback: number, name: string): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const text = raw.trim();
@@ -61,4 +66,18 @@ export function resolveSessionTtlSec(
     throw new Error(`SESSION_TTL_SEC must be at most ${SESSION_TTL_MAX_SEC}, got "${ttlSec}"`);
   }
   return ttlSec;
+}
+
+/**
+ * How long events and closed handoffs are kept, in days. Validated like the other
+ * env knobs: an invalid value stops the server at startup.
+ */
+export function resolveRetentionDays(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const days = positiveInt(env.RETENTION_DAYS, DEFAULT_RETENTION_DAYS, "RETENTION_DAYS");
+  if (days > RETENTION_DAYS_MAX) {
+    throw new Error(`RETENTION_DAYS must be at most ${RETENTION_DAYS_MAX}, got "${days}"`);
+  }
+  return days;
 }

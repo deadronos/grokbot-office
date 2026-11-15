@@ -154,10 +154,8 @@ export function streamRoutes({
       hub.add(client);
       stream.onAbort(stop);
 
-      // First bytes right away: EventSource fires `onopen` and proxies (e.g. the Vite dev
-      // proxy) flush the headers, even when there is nothing to replay yet.
-      await stream.write(`retry: ${STREAM_RETRY_MS}\n: open\n\n`).catch(stop);
-
+      // Start the ping timer before the awaited write: an abort during the opening
+      // frame then finds a timer to clear instead of leaking one.
       timer = setInterval(() => {
         if (stopped) return;
         // A session can expire or be revoked, and a token can die: pings are the check.
@@ -168,6 +166,10 @@ export function streamRoutes({
         }
         stream.writeSSE({ event: "ping", data: "{}" }).catch(stop);
       }, config.pingIntervalMs);
+
+      // First bytes right away: EventSource fires `onopen` and proxies (e.g. the Vite dev
+      // proxy) flush the headers, even when there is nothing to replay yet.
+      await stream.write(`retry: ${STREAM_RETRY_MS}\n: open\n\n`).catch(stop);
 
       // Replay (or catch up) and then stay open until a ping, an abort or shutdown ends us.
       // The finally keeps the hub and the timer clean even if a write or the DB throws.
