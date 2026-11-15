@@ -1,11 +1,11 @@
 import type Database from "better-sqlite3";
-import { and, asc, desc, eq, gt, isNull, notInArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, notInArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
 
 import { toUtc } from "../time.ts";
-import { botStatus, bots, events, handoffs, tokens } from "./schema.ts";
+import { botStatus, bots, events, handoffs, sessions, tokens } from "./schema.ts";
 
 export type Bot = typeof bots.$inferSelect;
 type BotPatch = Partial<Omit<Bot, "id" | "createdAt">>;
@@ -14,6 +14,7 @@ export type Event = typeof events.$inferSelect;
 type NewEvent = typeof events.$inferInsert;
 export type Handoff = typeof handoffs.$inferSelect;
 export type Token = typeof tokens.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
 
 /** One consistent read of everything the viewer snapshot needs. */
 export interface SnapshotRows {
@@ -113,6 +114,14 @@ export interface Repo {
   listTokens(): Token[];
   touchToken(id: string, lastUsedAt: string): void;
   revokeToken(id: string, revokedAt: string): void;
+  insertSession(session: Session): void;
+  findSessionByHash(hash: string): Session | undefined;
+  /** Revocation is idempotent: the first timestamp wins. */
+  revokeSession(id: string, revokedAt: string): void;
+  /** Lazy cleanup: drops sessions that expired before `before`. */
+  deleteExpiredSessions(before: string): void;
+  /** Highest `events.seq`, hidden bots included; 0 when empty. */
+  lastEventSeq(): number;
 }
 
 export function createSqliteRepo(sqlite: Database.Database): Repo {
@@ -468,5 +477,21 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         .where(and(eq(tokens.id, id), isNull(tokens.revokedAt)))
         .run();
     },
+    insertSession: (session) => {
+      db.insert(sessions).values(session).run();
+    },
+    findSessionByHash: (hash) =>
+      db.select().from(sessions).where(eq(sessions.tokenHash, hash)).get(),
+    revokeSession: (id, revokedAt) => {
+      // `expires_at` is the stored ISO text, so time order is text order.
+      db.update(sessions)
+        .set({ revokedAt })
+        .where(and(eq(sessions.id, id), isNull(sessions.revokedAt)))
+        .run();
+    },
+    deleteExpiredSessions: (before) => {
+      db.delete(sessions).where(lt(sessions.expiresAt, before)).run();
+    },
+    lastEventSeq: () => lastEventSeq(db),
   };
 }

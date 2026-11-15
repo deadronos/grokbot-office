@@ -173,11 +173,32 @@ is display-only and is clamped to ±10 minutes around it.
 
 ## Viewer API
 
-The viewer is private: there is no public read mode. Both read routes accept a viewer
+The viewer is private: there is no public read mode. The read routes accept a viewer
 bearer token (`pnpm admin token create --kind viewer`) or the env `ADMIN_TOKEN` as a
-bearer token; anything else gets `401`, and a bot token gets `403`. Responses are
-`Cache-Control: no-store`. #10 adds the HttpOnly session cookie the browser needs for
-SSE, so this API is header-only for now.
+bearer token; anything else gets `401`, and a bot token gets `403`. They also accept
+the HttpOnly session cookie the browser gets from `POST /api/session`, which is what
+`EventSource` can use. A token in the query string is never accepted. Responses are
+`Cache-Control: no-store`.
+
+### Sessions
+
+`EventSource` cannot send an `Authorization` header, so the browser trades its viewer
+token for a cookie once. Stored sessions keep only a SHA-256 hash of the cookie secret;
+`expires_at` is checked on every request, and revoking the viewer token ends its
+sessions too.
+
+```bash
+# 201; the cookie holds a 32-byte secret, the database only its hash
+curl -sS -X POST http://127.0.0.1:8787/api/session \
+  -H "Authorization: Bearer $VIEWER_TOKEN" -c jar.txt
+
+# 204; revokes the session and always clears the cookie
+curl -sS -o /dev/null -X POST http://127.0.0.1:8787/api/session/logout -b jar.txt
+```
+
+The cookie is `__Secure-bo_session`, `HttpOnly`, `Secure`, `SameSite=Strict`,
+`Path=/api`, and expires with the session: `SESSION_TTL_SEC` (default 28800, at most 604800) is validated at startup. Any request body to `POST /api/session` is ignored.
+Sessions expired for over a day are deleted the next time one is created.
 
 `GET /api/state` is the initial snapshot: visible bots (`hidden = false`) in shared
 desk-layout order (bots outside the layout follow, by id), their current status, the
@@ -229,9 +250,10 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
 
 The shared fixed layout (`DESKS` / `getDesk` in `packages/shared`) is the only source
 of desks: only its bots carry `desk` (the others are HUD-list only), and there is no
-per-bot desk field in the database or in `PATCH /api/admin/bots/:id`. A bot without a
-status row is `offline` since its registration time with `lastEventSeq: 0`. Optional
-fields are omitted rather than sent as `null`.
+per-bot desk field in the database or in `PATCH /api/admin/bots/:id`. For a bot in the
+layout, `pod` is the desk's pod (the layout is canonical); other bots keep the pod they
+registered with. A bot without a status row is `offline` since its registration time
+with `lastEventSeq: 0`. Optional fields are omitted rather than sent as `null`.
 
 Hidden bots stay out of both read routes. `hidden` is display-only: a hidden bot can
 still register, heartbeat and post events, but viewers never see the bot, its events,
@@ -276,6 +298,35 @@ events exist after it; `lastSeq` is the highest sequence in the database. While
 `lastSeq` (or the request's `since`, if that is larger), so a trailing run of hidden
 events is skipped instead of re-read on every poll. The page and `lastSeq` come from
 one read transaction. A `since` past the end returns an empty page.
+
+`GET /api/stream` is the live stream (`text/event-stream`) for the same visible events,
+behind the same viewer auth (bearer token or session cookie):
+
+```bash
+curl -sS -N http://127.0.0.1:8787/api/stream -H "Authorization: Bearer $VIEWER_TOKEN"
+```
+
+```
+id: 43
+event: event
+data: {"seq":43,"eventId":"01JBQ0M0S5R8D6P4W2G7X9K3ZY","botId":"data","type":"task_started","taskId":"issue-7","receivedAt":"2026-01-01T00:00:00.000Z"}
+
+event: ping
+data: {}
+```
+
+The frame `id` is the event `seq`, so `EventSource` resends it as `Last-Event-ID` on a
+reconnect and the stream resumes after it; `?since={seq}` does the same for clients that
+cannot set the header (`Last-Event-ID` wins when both are present). Without a cursor the
+stream is live only and starts at the current high-water mark. Cursor values follow the
+same rule as `/api/events`; unknown or malformed parameters and a malformed
+`Last-Event-ID` get `400 {"error":"invalid query"}` before the stream opens.
+
+Events use the same hidden-bot filter as the replay, so a hidden run in between is
+skipped rather than re-read. A ping every 25 seconds keeps proxies from idling the
+connection out and re-checks the credential: a revoked session or token ends the stream
+at the next ping, as does a server shutdown. At most 200 streams run at once; beyond
+that the answer is `503 {"error":"too many streams"}`.
 
 ## CI
 

@@ -126,3 +126,26 @@ export const tokens = sqliteTable(
     enumCheck("tokens_kind_check", "kind", TOKEN_KINDS),
   ],
 );
+
+/**
+ * Viewer sessions: the cookie carries a random secret, the row keeps only its hash,
+ * so a database leak does not hand out live sessions. Sessions belong to a viewer
+ * token; revoking the token kills them too (checked at request time).
+ */
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    tokenId: text("token_id")
+      .notNull()
+      .references(() => tokens.id),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (t) => [
+    uniqueIndex("sessions_token_hash_unique").on(t.tokenHash),
+    index("sessions_token_id_idx").on(t.tokenId),
+  ],
+);

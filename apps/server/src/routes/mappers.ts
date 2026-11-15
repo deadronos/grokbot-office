@@ -28,7 +28,8 @@ export function toBotSnapshot(bot: Bot, status: Status | undefined): BotSnapshot
     name: bot.name,
     role: bot.role,
     avatar: bot.avatar,
-    pod: bot.pod,
+    // The layout is canonical for desks, so it also decides the pod of a layout bot.
+    pod: desk?.pod ?? bot.pod,
     ...(desk ? { desk } : {}),
     status: status?.status ?? "offline",
     ...(status?.label === null || status?.label === undefined ? {} : { label: status.label }),

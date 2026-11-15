@@ -1,7 +1,9 @@
 import { createApp } from "./app.ts";
-import { type HeartbeatConfig, resolveHeartbeatConfig } from "./config.ts";
+import { DEFAULT_SESSION_TTL_SEC, type HeartbeatConfig, resolveHeartbeatConfig } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
+import type { StreamConfig } from "./routes/stream.ts";
+import { createStreamHub } from "./stream/hub.ts";
 
 /** Obviously fake admin token; real ones never live in the repo. */
 export const TEST_ADMIN_TOKEN = "test-admin-token-not-a-real-secret-0000";
@@ -23,11 +25,36 @@ export const botRecord = (id: string) => ({
 export function testSetup({
   adminToken = TEST_ADMIN_TOKEN,
   heartbeat = resolveHeartbeatConfig({}),
-}: { adminToken?: string; heartbeat?: HeartbeatConfig } = {}) {
+  sessionTtlSec = DEFAULT_SESSION_TTL_SEC,
+  stream,
+}: {
+  adminToken?: string;
+  heartbeat?: HeartbeatConfig;
+  sessionTtlSec?: number;
+  stream?: StreamConfig;
+} = {}) {
   const db = openDatabase(":memory:");
   const repo = createSqliteRepo(db);
-  const app = createApp({ repo, adminToken, heartbeat });
-  return { db, repo, app, close: () => db.close() };
+  const hub = createStreamHub();
+  const app = createApp({
+    repo,
+    adminToken,
+    heartbeat,
+    hub,
+    sessionTtlSec,
+    stream,
+  });
+  // Ending streams first stops their ping timers, so no test leaks a timer.
+  return {
+    db,
+    repo,
+    hub,
+    app,
+    close: () => {
+      hub.closeAll();
+      db.close();
+    },
+  };
 }
 
 export const adminHeaders = (token = TEST_ADMIN_TOKEN) => ({ authorization: `Bearer ${token}` });
