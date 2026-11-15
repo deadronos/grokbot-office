@@ -8,23 +8,27 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { describe, expect, it } from "vitest";
 
 import { openDatabase } from "./database.ts";
+import { createSqliteRepo } from "./repo.ts";
 
 const MIGRATIONS = resolve(import.meta.dirname, "../../drizzle");
 const NOW = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-01-02T00:00:00.000Z";
 
-/** A migrations folder that stops after 0000, so the old tables can be filled first. */
-function folderAt0000(dir: string): string {
-  const folder = join(dir, "drizzle-0000");
+/** A migrations folder holding only the first `count` migrations, so old tables can be filled. */
+function folderAt(dir: string, count: number): string {
+  const folder = join(dir, `drizzle-${count}`);
   mkdirSync(join(folder, "meta"), { recursive: true });
-  copyFileSync(join(MIGRATIONS, "0000_init.sql"), join(folder, "0000_init.sql"));
-  const journal = JSON.parse(readFileSync(join(MIGRATIONS, "meta/_journal.json"), "utf8"));
-  writeFileSync(
-    join(folder, "meta/_journal.json"),
-    JSON.stringify({ ...journal, entries: journal.entries.slice(0, 1) }),
-  );
+  const journal = JSON.parse(readFileSync(join(MIGRATIONS, "meta/_journal.json"), "utf8")) as {
+    entries: { tag: string }[];
+  };
+  const entries = journal.entries.slice(0, count);
+  for (const entry of entries) {
+    copyFileSync(join(MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(join(folder, "meta/_journal.json"), JSON.stringify({ ...journal, entries }));
   return folder;
 }
+const folderAt0000 = (dir: string) => folderAt(dir, 1);
 
 /**
  * SQLite cannot add CHECK or foreign-key constraints in place, so 0001 recreates
@@ -159,6 +163,64 @@ describe("0001_constraints migration", () => {
       ).toThrow(/CHECK/);
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("0005_label_handoff migration", () => {
+  it("backfills the label source of accepts stored before the upgrade", () => {
+    const dir = mkdtempSync(join(tmpdir(), "grokbot-office-migrations-"));
+    const path = join(dir, "bot-office.db");
+    try {
+      const old = new Database(path);
+      old.pragma("foreign_keys = ON");
+      migrate(drizzle(old), { migrationsFolder: folderAt(dir, 5) });
+      const bot = old.prepare(
+        "insert into bots (id, name, role, avatar, pod, hidden, created_at, updated_at) values (?, ?, 'worker', 'robot', 'dev', 0, ?, ?)",
+      );
+      for (const id of ["quark", "zeta", "omega"]) bot.run(id, id, NOW, NOW);
+      old
+        .prepare(
+          "insert into handoffs (id, from_bot_id, to_bot_id, label, state, sent_at, accepted_at) values ('h-later', 'quark', 'zeta', 'LATER-HIDDEN-LABEL', 'accepted', ?, ?)",
+        )
+        .run(NOW, LATER);
+      old
+        .prepare(
+          "insert into events (event_id, bot_id, type, handoff_id, received_at) values ('e2', 'zeta', 'handoff_accepted', 'h-later', ?)",
+        )
+        .run(LATER);
+      const status = old.prepare(
+        "insert into bot_status (bot_id, status, label, since, last_heartbeat_at) values (?, 'working', ?, ?, ?)",
+      );
+      status.run("zeta", "LATER-HIDDEN-LABEL", LATER, LATER);
+      // Same receiver pattern, but a label of its own: not attributed.
+      status.run("omega", "own work", LATER, LATER);
+      old.close();
+
+      const db = openDatabase(path);
+      try {
+        const sources = db
+          .prepare("select bot_id, label_handoff_id from bot_status order by bot_id")
+          .all();
+        expect(sources).toEqual([
+          { bot_id: "omega", label_handoff_id: null },
+          { bot_id: "zeta", label_handoff_id: "h-later" },
+        ]);
+        expect(db.pragma("foreign_key_check")).toEqual([]);
+
+        // Hiding the sender after the upgrade scrubs the backfilled label at read time.
+        const repo = createSqliteRepo(db);
+        repo.updateBot("quark", { hidden: true });
+        const zeta = repo.getSnapshot().statuses.find((row) => row.botId === "zeta");
+        expect(zeta?.label).toBeNull();
+        expect(repo.getSnapshot().statuses.find((row) => row.botId === "omega")?.label).toBe(
+          "own work",
+        );
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

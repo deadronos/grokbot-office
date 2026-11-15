@@ -6,6 +6,10 @@ export type HeartbeatConfig = {
 export const DEFAULT_HEARTBEAT_INTERVAL_SEC = 60;
 export const DEFAULT_HEARTBEAT_TIMEOUT_SEC = 300;
 
+export const DEFAULT_SESSION_TTL_SEC = 28800;
+/** A week: beyond this a viewer cookie outlives any reason to keep it. */
+export const SESSION_TTL_MAX_SEC = 604800;
+
 function positiveInt(raw: string | undefined, fallback: number, name: string): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const text = raw.trim();
@@ -43,4 +47,18 @@ export function resolveHeartbeatConfig(
     );
   }
   return { intervalSec, timeoutSec };
+}
+
+/**
+ * Viewer session lifetime in seconds. Validated like the heartbeat values: a
+ * malformed or out-of-range value stops the server at startup.
+ */
+export function resolveSessionTtlSec(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const ttlSec = positiveInt(env.SESSION_TTL_SEC, DEFAULT_SESSION_TTL_SEC, "SESSION_TTL_SEC");
+  if (ttlSec > SESSION_TTL_MAX_SEC) {
+    throw new Error(`SESSION_TTL_SEC must be at most ${SESSION_TTL_MAX_SEC}, got "${ttlSec}"`);
+  }
+  return ttlSec;
 }

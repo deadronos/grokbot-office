@@ -83,12 +83,6 @@ Canvas redraws. Connection indicator, top right:
   `GET /api/state` could not be reached (Mac asleep, server down); a probe that cannot
   reach the server keeps this timer running
 
-`POST /api/session`, the `__Secure-bo_session` cookie and `GET /api/stream` are
-implemented on the server in #8 (PR 40). The client follows the PR contract and is
-tested against mocked `fetch` / `EventSource`; re-verify it against the real server
-once that PR merges. The `GET /api/state` / `GET /api/events` viewer API below still
-accepts only a bearer header on `main` today.
-
 ## Scripts
 
 | Script              | What it does                      |
@@ -221,11 +215,32 @@ is display-only and is clamped to ±10 minutes around it.
 
 ## Viewer API
 
-The viewer is private: there is no public read mode. Both read routes accept a viewer
+The viewer is private: there is no public read mode. The read routes accept a viewer
 bearer token (`pnpm admin token create --kind viewer`) or the env `ADMIN_TOKEN` as a
-bearer token; anything else gets `401`, and a bot token gets `403`. Responses are
-`Cache-Control: no-store`. #8 adds the HttpOnly session cookie the browser needs for
-SSE, so this API is header-only on `main` for now.
+bearer token; anything else gets `401`, and a bot token gets `403`. They also accept
+the HttpOnly session cookie the browser gets from `POST /api/session`, which is what
+`EventSource` can use. A token in the query string is never accepted. Responses are
+`Cache-Control: no-store`.
+
+### Sessions
+
+`EventSource` cannot send an `Authorization` header, so the browser trades its viewer
+token for a cookie once. Stored sessions keep only a SHA-256 hash of the cookie secret;
+`expires_at` is checked on every request, and revoking the viewer token ends its
+sessions too.
+
+```bash
+# 201; the cookie holds a 32-byte secret, the database only its hash
+curl -sS -X POST http://127.0.0.1:8787/api/session \
+  -H "Authorization: Bearer $VIEWER_TOKEN" -c jar.txt
+
+# 204; revokes the session and always clears the cookie
+curl -sS -o /dev/null -X POST http://127.0.0.1:8787/api/session/logout -b jar.txt
+```
+
+The cookie is `__Secure-bo_session`, `HttpOnly`, `Secure`, `SameSite=Strict`,
+`Path=/api`, and expires with the session: `SESSION_TTL_SEC` (default 28800, at most 604800) is validated at startup. Any request body to `POST /api/session` is ignored.
+Sessions expired for over a day are deleted the next time one is created.
 
 `GET /api/state` is the initial snapshot: visible bots (`hidden = false`) in shared
 desk-layout order (bots outside the layout follow, by id), their current status, the
@@ -277,15 +292,32 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
 
 The shared fixed layout (`DESKS` / `getDesk` in `packages/shared`) is the only source
 of desks: only its bots carry `desk` (the others are HUD-list only), and there is no
-per-bot desk field in the database or in `PATCH /api/admin/bots/:id`. A bot without a
-status row is `offline` since its registration time with `lastEventSeq: 0`. Optional
-fields are omitted rather than sent as `null`.
+per-bot desk field in the database or in `PATCH /api/admin/bots/:id`. For a bot in the
+layout, `pod` is the desk's pod (the layout is canonical); other bots keep the pod they
+registered with. A bot without a status row is `offline` since its registration time
+with `lastEventSeq: 0`. Optional fields are omitted rather than sent as `null`.
 
 Hidden bots stay out of both read routes. `hidden` is display-only: a hidden bot can
 still register, heartbeat and post events, but viewers never see the bot, its events,
 events that hand off to it, or open handoffs from or to it. The flag is read at request
 time, so un-hiding a bot shows its history again. `lastSeq` / `lastEventSeq` stay the
 global high-water mark, hidden events included, so `seq` has gaps for viewers.
+
+A visible bot accepting a handoff from a hidden sender leaks nothing from that side, and
+both scrubs happen at read time, so it does not matter whether the sender was hidden
+before or after the accept, and un-hiding restores everything:
+
+- the `handoff_accepted` event keeps its `handoffId` in the database, but the replay and
+  the live stream omit it while the sender is hidden;
+- the receiver's status remembers which handoff its label came from
+  (`bot_status.label_handoff_id`). While that handoff's sender is hidden, the snapshot
+  shows the accept event's own `label` instead, or no label: never the hidden handoff's
+  label and never a placeholder. Any later label change clears the link. Migration 0005
+  backfills the link for accepts stored before it by matching the label text against
+  handoffs the bot accepted (it can only over-attribute, which hides exactly that text).
+
+A visible sender's own handoff label stays visible on the receiver: it is that sender's
+own work.
 
 `GET /api/events?since={seq}&limit={n}` replays the log: events with `seq > since`
 ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
@@ -324,6 +356,43 @@ events exist after it; `lastSeq` is the highest sequence in the database. While
 `lastSeq` (or the request's `since`, if that is larger), so a trailing run of hidden
 events is skipped instead of re-read on every poll. The page and `lastSeq` come from
 one read transaction. A `since` past the end returns an empty page.
+
+`GET /api/stream` is the live stream (`text/event-stream`) for the same visible events,
+behind the same viewer auth (bearer token or session cookie):
+
+```bash
+curl -sS -N http://127.0.0.1:8787/api/stream -H "Authorization: Bearer $VIEWER_TOKEN"
+```
+
+```
+id: 43
+event: event
+data: {"seq":43,"eventId":"01JBQ0M0S5R8D6P4W2G7X9K3ZY","botId":"data","type":"task_started","taskId":"issue-7","receivedAt":"2026-01-01T00:00:00.000Z"}
+
+event: ping
+data: {}
+```
+
+The frame `id` is the event `seq`, so `EventSource` resends it as `Last-Event-ID` on a
+reconnect and the stream resumes after it; `?since={seq}` does the same for clients that
+cannot set the header (`Last-Event-ID` wins when both are present). Without a cursor the
+stream is live only and starts at the current high-water mark. Cursor values follow the
+same rule as `/api/events`; unknown or malformed parameters and a malformed
+`Last-Event-ID` get `400 {"error":"invalid query"}` before the stream opens. A cursor past
+the newest event (for example after a database reset) is clamped to the newest event, so
+the stream goes live instead of waiting for ids that will never come.
+
+Every stream starts with `retry: 3000` and a `: open` comment, so `EventSource` fires
+`onopen` (and dev proxies flush the response) right away even when nothing is replayed.
+Stream responses carry `Connection: close`; on `SIGTERM`/`SIGINT` the server ends every
+stream, closes idle keep-alive connections as they appear, and exits without waiting for
+the keep-alive timeout.
+
+Events use the same hidden-bot filter as the replay, so a hidden run in between is
+skipped rather than re-read. A ping every 25 seconds keeps proxies from idling the
+connection out and re-checks the credential: a revoked session or token ends the stream
+at the next ping, as does a server shutdown. At most 200 streams run at once; beyond
+that the answer is `503 {"error":"too many streams"}`.
 
 ## CI
 

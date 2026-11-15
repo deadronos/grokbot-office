@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_INTERVAL_SEC,
   DEFAULT_HEARTBEAT_TIMEOUT_SEC,
+  DEFAULT_SESSION_TTL_SEC,
   resolveHeartbeatConfig,
+  resolveSessionTtlSec,
+  SESSION_TTL_MAX_SEC,
 } from "./config.ts";
 
 describe("resolveHeartbeatConfig", () => {
@@ -43,5 +46,32 @@ describe("resolveHeartbeatConfig", () => {
     expect(() =>
       resolveHeartbeatConfig({ HEARTBEAT_INTERVAL_SEC: "300", HEARTBEAT_TIMEOUT_SEC: "60" }),
     ).toThrow(/must be greater than HEARTBEAT_INTERVAL_SEC/);
+  });
+});
+
+describe("resolveSessionTtlSec", () => {
+  it("falls back to eight hours", () => {
+    expect(DEFAULT_SESSION_TTL_SEC).toBe(28800);
+    expect(resolveSessionTtlSec({})).toBe(28800);
+    expect(resolveSessionTtlSec({ SESSION_TTL_SEC: " " })).toBe(28800);
+  });
+
+  it("reads an override and trims it", () => {
+    expect(resolveSessionTtlSec({ SESSION_TTL_SEC: " 3600 " })).toBe(3600);
+    expect(resolveSessionTtlSec({ SESSION_TTL_SEC: String(SESSION_TTL_MAX_SEC) })).toBe(
+      SESSION_TTL_MAX_SEC,
+    );
+  });
+
+  it("rejects values that are not positive integers", () => {
+    for (const value of ["0", "-5", "1.5", "abc", "1e3", "Infinity"]) {
+      expect(() => resolveSessionTtlSec({ SESSION_TTL_SEC: value })).toThrow(/SESSION_TTL_SEC/);
+    }
+  });
+
+  it("rejects more than a week", () => {
+    expect(() =>
+      resolveSessionTtlSec({ SESSION_TTL_SEC: String(SESSION_TTL_MAX_SEC + 1) }),
+    ).toThrow(/SESSION_TTL_SEC/);
   });
 });

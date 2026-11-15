@@ -86,6 +86,7 @@ describe("POST /api/events", () => {
       taskId: null,
       handoffTo: null,
       handoffId: null,
+      labelHandoffId: null,
       since: NOW,
       lastHeartbeatAt: NOW,
       lastEventSeq: null,

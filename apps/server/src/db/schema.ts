@@ -68,6 +68,9 @@ export const botStatus = sqliteTable(
     handoffTo: text("handoff_to").references(() => bots.id),
     // The handoff a `waiting` bot is waiting on; only its acceptance releases the bot.
     handoffId: text("handoff_id").references(() => handoffs.id),
+    // The accepted handoff whose label `label` came from; viewers lose that label while
+    // the handoff's sender is hidden (read time). Cleared whenever the label changes.
+    labelHandoffId: text("label_handoff_id").references(() => handoffs.id),
     since: text("since").notNull(),
     lastHeartbeatAt: text("last_heartbeat_at").notNull(),
     lastEventSeq: integer("last_event_seq"),
@@ -124,5 +127,28 @@ export const tokens = sqliteTable(
     uniqueIndex("tokens_hash_unique").on(t.hash),
     index("tokens_bot_id_idx").on(t.botId),
     enumCheck("tokens_kind_check", "kind", TOKEN_KINDS),
+  ],
+);
+
+/**
+ * Viewer sessions: the cookie carries a random secret, the row keeps only its hash,
+ * so a database leak does not hand out live sessions. Sessions belong to a viewer
+ * token; revoking the token kills them too (checked at request time).
+ */
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    tokenId: text("token_id")
+      .notNull()
+      .references(() => tokens.id),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (t) => [
+    uniqueIndex("sessions_token_hash_unique").on(t.tokenHash),
+    index("sessions_token_id_idx").on(t.tokenId),
   ],
 );
