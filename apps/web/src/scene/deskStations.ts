@@ -36,5 +36,5 @@ export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   chairSeat: place(desk, 0, 0.48, -0.75),
   chairBack: place(desk, 0, 0.7, -1),
   bot: place(desk, 0, 0.75, -0.75),
-  namePlate: place(desk, 0, 1.6, 0),
+  namePlate: place(desk, 0, 2.1, -0.75),
 }));

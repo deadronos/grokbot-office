@@ -33,6 +33,8 @@ describe("desk stations", () => {
 
   it("places the plate above the bot", () => {
     for (const station of DESK_STATIONS) {
+      expect(station.namePlate.position[0]).toBe(station.bot.position[0]);
+      expect(station.namePlate.position[2]).toBe(station.bot.position[2]);
       expect(station.namePlate.position[1]).toBeGreaterThan(station.bot.position[1]);
     }
   });

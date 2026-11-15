@@ -1,5 +1,5 @@
 import { OrbitControls } from "@react-three/drei";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
@@ -11,7 +11,6 @@ import { CAMERA, CANVAS_DPR, FRAMELOOP, ORBIT_LIMITS, SHADOWS } from "./sceneCon
 const ROOM = { width: 12.5, depth: 10.5, wallHeight: 3.2, wall: 0.2 };
 const BACKGROUND = "#141821";
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const PLATE_ROTATION: [number, number, number] = [-0.3, 0.6, 0];
 
 // Static furniture placements, so their instance matrices are built exactly once.
 const DESK_BODIES = DESK_STATIONS.map((station) => station.deskBody);
@@ -115,14 +114,35 @@ function createNameTexture(text: string): THREE.CanvasTexture {
 }
 
 function NamePlate({ text, placement }: { text: string; placement: Placement }) {
+  const meshRef = useRef<THREE.Mesh>(null);
   const texture = useMemo(() => createNameTexture(text), [text]);
   useEffect(() => () => texture.dispose(), [texture]);
+  // Billboard toward the camera so plates stay readable as the orbit moves.
+  // useFrame only runs when the demand loop invalidates (mount and orbit).
+  useFrame(({ camera }) => {
+    meshRef.current?.quaternion.copy(camera.quaternion);
+  });
   return (
-    <mesh position={placement.position} rotation={PLATE_ROTATION}>
+    <mesh ref={meshRef} position={placement.position}>
       <planeGeometry args={[1.5, 0.38]} />
       <meshBasicMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
     </mesh>
   );
+}
+
+/** Drops the scene to the WebGL fallback when the context is lost. */
+function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
+  const gl = useThree((state) => state.gl);
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const onLost = (event: Event) => {
+      event.preventDefault();
+      onContextLost?.();
+    };
+    canvas.addEventListener("webglcontextlost", onLost);
+    return () => canvas.removeEventListener("webglcontextlost", onLost);
+  }, [gl, onContextLost]);
+  return null;
 }
 
 function DeskOccupants() {
@@ -142,7 +162,7 @@ function DeskOccupants() {
 }
 
 /** Static office scene: the only Canvas in the app, loaded as its own async chunk. */
-export default function OfficeScene() {
+export default function OfficeScene({ onContextLost }: { onContextLost?: () => void } = {}) {
   return (
     <Canvas
       dpr={CANVAS_DPR}
@@ -150,11 +170,16 @@ export default function OfficeScene() {
       shadows={SHADOWS}
       camera={CAMERA}
       style={{ position: "fixed", inset: 0 }}
+      onCreated={({ gl }) => {
+        gl.domElement.setAttribute("aria-label", "Office scene");
+        gl.domElement.setAttribute("role", "img");
+      }}
     >
       <color attach="background" args={[BACKGROUND]} />
       <ambientLight intensity={1.6} />
       <directionalLight position={[6, 10, 8]} intensity={2.2} />
       <SceneInvalidator />
+      <WebGlContextGuard onContextLost={onContextLost} />
       <Room />
       <Furniture />
       <DeskOccupants />
