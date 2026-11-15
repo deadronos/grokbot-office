@@ -78,7 +78,14 @@ function reduceEvent(data: OfficeData, event: StreamEvent): OfficeData {
       if (!bot) break;
       const status = event.status ?? bot.status;
       const resting = status === "idle" || status === "offline";
-      update({ status, label: event.label, since: at, taskId: resting ? undefined : bot.taskId });
+      // A missing label leaves the current one. The server omits null labels on
+      // the wire (`toStreamEvent`), so an explicit clear never arrives here.
+      update({
+        status,
+        label: event.label !== undefined ? event.label : bot.label,
+        since: at,
+        taskId: resting ? undefined : bot.taskId,
+      });
       break;
     }
     case "task_started": {
@@ -155,6 +162,38 @@ async function postSession(path: string): Promise<Response> {
   return fetch(path, { method: "POST", credentials: "same-origin" });
 }
 
+let refreshInFlight = false;
+let pendingSnapshotEvents: StreamEvent[] = [];
+
+async function fetchSnapshot(): Promise<StateSnapshot | "unauthorized" | "failed"> {
+  try {
+    const response = await fetch(STATE_PATH, { credentials: "same-origin" });
+    if (response.status === 401) return "unauthorized";
+    if (!response.ok) return "failed";
+    const parsed = StateSnapshot.safeParse(await response.json());
+    return parsed.success ? parsed.data : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
+/** Reloads the snapshot so a newly registered bot can join the store. */
+async function refreshOfficeSnapshot(getState: () => OfficeStore): Promise<void> {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {
+    const result = await fetchSnapshot();
+    if (result !== "unauthorized" && result !== "failed") {
+      getState().applySnapshot(result);
+    }
+  } finally {
+    const queued = pendingSnapshotEvents;
+    pendingSnapshotEvents = [];
+    refreshInFlight = false;
+    for (const event of queued) getState().applyEvent(event);
+  }
+}
+
 export const useOfficeStore = create<OfficeStore>()((set, get) => ({
   ...EMPTY_DATA,
   phase: "checking",
@@ -175,6 +214,17 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
     const state = get();
     // Frames can repeat after a reconnect; the sequence makes replay idempotent.
     if (event.seq <= state.lastEventSeq) return;
+    // bot_registered does not carry name/role/avatar/pod, so a bot that was
+    // not in the snapshot has to come from a fresh GET /api/state. Events
+    // that arrive during that fetch are applied once the snapshot lands.
+    if (refreshInFlight) {
+      pendingSnapshotEvents.push(event);
+      return;
+    }
+    if (event.type === "bot_registered" && !state.bots[event.botId]) {
+      void refreshOfficeSnapshot(get);
+      return;
+    }
     set(reduceEvent(state, event));
     invalidateScene();
   },

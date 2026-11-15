@@ -405,3 +405,75 @@ describe("stream", () => {
     expect(invalidateScene).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("applyEvent", () => {
+  it("keeps the current label when status_changed has none", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    useOfficeStore
+      .getState()
+      .applyEvent(streamEvent(8, { type: "status_changed", status: "reviewing" }));
+
+    const bot = useOfficeStore.getState().bots.data;
+    expect(bot?.status).toBe("reviewing");
+    expect(bot?.label).toBe("issue-11");
+    expect(bot?.taskId).toBe("issue-11");
+  });
+
+  it("replaces the label when status_changed carries one", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    useOfficeStore
+      .getState()
+      .applyEvent(
+        streamEvent(8, { type: "status_changed", status: "reviewing", label: "reviewing plan" }),
+      );
+
+    expect(useOfficeStore.getState().bots.data?.label).toBe("reviewing plan");
+  });
+
+  it("refetches the snapshot when a new bot registers", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    const withLumi: StateSnapshot = {
+      ...snapshot,
+      bots: [
+        ...snapshot.bots,
+        {
+          id: "lumi",
+          name: "Lumi",
+          role: "Designer",
+          avatar: "glow",
+          pod: "ops",
+          status: "idle",
+          since: AT,
+          lastHeartbeatAt: AT,
+          lastEventSeq: 8,
+        },
+      ],
+      lastEventSeq: 8,
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(withLumi));
+
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "lumi" }));
+
+    await vi.waitFor(() => expect(useOfficeStore.getState().bots.lumi?.name).toBe("Lumi"));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/state", { credentials: "same-origin" });
+    expect(useOfficeStore.getState().lastEventSeq).toBe(8);
+  });
+
+  it("does not refetch when a known bot re-registers", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    fetchMock.mockClear();
+
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "data" }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useOfficeStore.getState().bots.data?.name).toBe("Data");
+    expect(useOfficeStore.getState().lastEventSeq).toBe(8);
+  });
+});

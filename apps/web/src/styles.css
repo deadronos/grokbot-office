@@ -51,11 +51,17 @@ canvas {
   color: #8b93a1;
 }
 
-.connection {
+.session-bar {
   position: fixed;
   top: 1rem;
   right: 1.25rem;
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.connection {
   margin: 0;
   padding: 0.2rem 0.6rem;
   border: 1px solid currentColor;
@@ -65,6 +71,28 @@ canvas {
   text-transform: uppercase;
   opacity: 0.8;
   pointer-events: none;
+}
+
+.logout-button {
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #8b93a1;
+  border-radius: 999px;
+  background: transparent;
+  color: #f4f6fb;
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.logout-button:hover,
+.logout-button:focus-visible {
+  opacity: 1;
+  outline: 2px solid #f4f6fb;
+  outline-offset: 2px;
 }
 
 .connection-live {

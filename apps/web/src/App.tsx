@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 
 import { APP_NAME } from "@grokbot-office/shared";
 
-import { ConnectionIndicator } from "./ConnectionIndicator";
+import { SessionBar } from "./SessionBar";
 import { LoginScreen } from "./LoginScreen";
 import { useOfficeStore } from "./store/officeStore";
 import { WebGlErrorBoundary, WebGlFallback } from "./WebGlErrorBoundary";
@@ -44,7 +44,7 @@ export function App() {
     <main className="app">
       <h1 className="app-title">{APP_NAME}</h1>
       <OfficeStage />
-      {phase === "ready" ? <ConnectionIndicator /> : null}
+      {phase === "ready" ? <SessionBar /> : null}
       {phase === "login" ? <LoginScreen /> : null}
     </main>
   );

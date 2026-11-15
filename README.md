@@ -44,6 +44,13 @@ pnpm dev               # server on http://127.0.0.1:8787, web on http://127.0.0.
 The Vite dev server proxies `/api` to the server, so `http://127.0.0.1:5173/api/health`
 works from the browser.
 
+Sign in at that Vite origin (`http://127.0.0.1:5173`), not by opening the API port in
+the browser. Chrome treats loopback HTTP as a secure context, so it stores the
+`__Secure-bo_session` cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/api`)
+on `http://127.0.0.1:5173` and on `http://localhost:5173`. There is no separate
+dev-TLS setup. The dev server listens on `127.0.0.1` only, so `http://[::1]:5173`
+will not connect.
+
 ## Web app (viewer)
 
 The web app is private too. On first load it calls `GET /api/state` with
@@ -72,7 +79,11 @@ from the last frame it saw, and the server prefers that header over `?since=`.
 The zustand store holds the snapshot, applies stream events immutably (skipping
 `seq <= lastEventSeq` so a reconnect replay is idempotent), exposes a per-bot selector
 so one desk can re-render on its own, and calls `invalidateScene()` so the on-demand
-Canvas redraws. Connection indicator, top right:
+Canvas redraws. A `bot_registered` event for a bot that was not in the snapshot
+refetches `GET /api/state`, because the frame does not carry name, role, avatar or pod.
+A `status_changed` event without a `label` keeps the current one (the server omits a
+null label on the wire, so an explicit clear never arrives). Top right: a sign-out
+button, plus the connection indicator:
 
 - `live` – the stream is open and event frames or 25 s `ping` frames (`data: {}`) arrive
 - `reconnecting` – the stream errored; the browser's `EventSource` retries and resumes
