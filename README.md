@@ -152,13 +152,13 @@ heartbeat.
 
 The server derives `bot_status` from the events, in order:
 
-| Event              | Status after it                                                       |
-| ------------------ | --------------------------------------------------------------------- |
-| `status_changed`   | that status, with its `label`                                         |
-| `task_started`     | `working`, `task_id` = the event's                                    |
-| `task_finished`    | `idle`; `task_id` and `label` are cleared                             |
-| `handoff_sent`     | `waiting` with `handoff_to`, unless another task is still open        |
-| `handoff_accepted` | `working` for the receiver; a sender still waiting for it goes `idle` |
+| Event              | Status after it                                                                                     |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `status_changed`   | that status, with its `label`                                                                       |
+| `task_started`     | `working`, `task_id` = the event's                                                                  |
+| `task_finished`    | `idle`; `task_id` and `label` are cleared                                                           |
+| `handoff_sent`     | `waiting` with `handoff_to`, unless another task is still open                                      |
+| `handoff_accepted` | `working` for the receiver (task = the event's `taskId`); a sender still waiting for it goes `idle` |
 
 `since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
 (`sent` → `accepted`). An event the server cannot apply (a handoff to itself or to an
