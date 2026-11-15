@@ -151,3 +151,6 @@ vite.config.ts.timestamp-*
 # Bot Office
 data/
 .worktrees/
+*.db
+*.db-wal
+*.db-shm
