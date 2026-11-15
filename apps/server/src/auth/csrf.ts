@@ -27,21 +27,21 @@ export function isTrustedOrigin({
   return originHostMatches(origin, host);
 }
 
-/** Host only, ignoring scheme: `https://office.example` matches `Host: office.example`. */
+/**
+ * Host only, ignoring scheme: `https://office.example` matches `Host: office.example`.
+ * Omitted ports use the Origin scheme's default (443 for https, 80 for http), so a
+ * Host without a port does not match an Origin on a non-default port. When both
+ * sides state a port, those ports must be equal.
+ */
 export function originHostMatches(origin: string, hostHeader: string | undefined): boolean {
   if (hostHeader === undefined || hostHeader.trim() === "") return false;
   try {
     const url = new URL(origin);
-    const header = hostHeader.trim();
-    if (url.host.toLowerCase() === header.toLowerCase()) return true;
-    const headerHost = header.toLowerCase();
-    const hostname = url.hostname.toLowerCase();
-    const colon = splitHostPort(headerHost);
-    if (colon.hostname !== hostname) return false;
-    // A Host without a port (typical behind a TLS proxy on 443) matches the hostname.
-    if (colon.port === undefined) return true;
-    const originPort = url.port || (url.protocol === "https:" ? "443" : "80");
-    return colon.port === originPort;
+    const defaultPort = url.protocol === "https:" ? "443" : "80";
+    const header = splitHostPort(hostHeader.trim().toLowerCase());
+    const originPort = url.port || defaultPort;
+    const hostPort = header.port ?? defaultPort;
+    return url.hostname.toLowerCase() === header.hostname && originPort === hostPort;
   } catch {
     return false;
   }

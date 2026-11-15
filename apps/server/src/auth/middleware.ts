@@ -240,11 +240,15 @@ export function requireViewer({
       graceSec: policy.graceSec,
     });
     if (!result.ok) {
-      // Only bearer/token attempts use the failed-auth bucket, and only after they fail.
+      // Bearer failures and unknown/unparseable cookies share the failed-auth bucket,
+      // counted only after they fail. A known cookie that is expired, idle or revoked
+      // still answers 401 even when that bucket is full.
       if (header !== undefined)
         return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
       if (secret === undefined)
         return ipLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
+      if (result.reason === "unknown session")
+        return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
       return reject(c, result.status, result.reason, result.tokenId);
     }
 

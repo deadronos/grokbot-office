@@ -223,6 +223,38 @@ describe("rate limits", () => {
     expect((await res.json()) as object).toEqual({ error: "unauthorized" });
   });
 
+  it("counts an unknown cookie against the failed-auth bucket after it fails", async () => {
+    // A larger token burst so the valid cookie is not 429 from its own budget after
+    // login + the pre-flood probe; the failed-auth IP burst stays at 2.
+    const { app, db, viewer } = rateLimitedApp({
+      perMin: 60,
+      burst: 20,
+      ipPerMin: 60,
+      ipBurst: 2,
+    });
+    const cookie = sessionCookieHeader(
+      await app.request("/api/session", {
+        method: "POST",
+        headers: { authorization: `Bearer ${viewer.token}` },
+      }),
+    );
+    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
+
+    const garbage = () =>
+      app.request("/api/state", {
+        headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
+      });
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(429);
+
+    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
+    db.prepare("update sessions set expires_at = ?").run("2000-01-01T00:00:00.000Z");
+    const expired = await app.request("/api/state", { headers: { cookie } });
+    expect(expired.status).toBe(401);
+    expect((await expired.json()) as object).toEqual({ error: "unauthorized" });
+  });
+
   it("keeps rate-limit buckets apart per surface", async () => {
     const config = { perMin: 60, burst: 2, ipPerMin: 60, ipBurst: 2 };
     const db = openDatabase(":memory:");
@@ -392,9 +424,28 @@ describe("viewer static and HSTS", () => {
     const viewer = createApp({ ...shared, surface: "viewer" });
     const bot = createApp({ ...shared, surface: "bot" });
 
-    const viewerRes = await viewer.request(HEALTH_PATH);
-    expect(viewerRes.headers.get("strict-transport-security")).toBe("max-age=31536000");
-    expect(viewerRes.headers.get("strict-transport-security")).not.toContain("preload");
+    // A plain http request (dev, or Node behind a TLS proxy with no hint) must not get HSTS.
+    expect((await viewer.request(HEALTH_PATH)).headers.get("strict-transport-security")).toBeNull();
     expect((await bot.request(HEALTH_PATH)).headers.get("strict-transport-security")).toBeNull();
+
+    const httpsHints = [
+      { origin: "https://office.example" },
+      { referer: "https://office.example/office" },
+      { "x-forwarded-proto": "https" },
+    ];
+    for (const headers of httpsHints) {
+      const res = await viewer.request(HEALTH_PATH, { headers });
+      expect([headers, res.headers.get("strict-transport-security")]).toEqual([
+        headers,
+        "max-age=31536000",
+      ]);
+      expect(res.headers.get("strict-transport-security")).not.toContain("preload");
+    }
+    // Even with a proto hint, the Funnel/bot surface stays HSTS-free.
+    expect(
+      (await bot.request(HEALTH_PATH, { headers: { "x-forwarded-proto": "https" } })).headers.get(
+        "strict-transport-security",
+      ),
+    ).toBeNull();
   });
 });

@@ -41,12 +41,15 @@ export function App() {
   }, [phase, startStream]);
 
   useEffect(() => {
-    const unload = () => useOfficeStore.getState().setPageUnloading(true);
-    window.addEventListener("pagehide", unload);
-    window.addEventListener("beforeunload", unload);
+    const onHide = () => useOfficeStore.getState().onPageHide();
+    const onShow = (event: PageTransitionEvent) => {
+      void useOfficeStore.getState().onPageShow(event.persisted);
+    };
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("pageshow", onShow);
     return () => {
-      window.removeEventListener("pagehide", unload);
-      window.removeEventListener("beforeunload", unload);
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("pageshow", onShow);
     };
   }, []);
 

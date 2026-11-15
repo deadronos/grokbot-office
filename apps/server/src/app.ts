@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "@hono/node-server/serve-static";
 
@@ -43,6 +43,28 @@ const BASE_SECURITY_HEADERS: Record<string, string> = {
 };
 
 const BOT_HEARTBEAT_PATH = /^\/api\/bots\/[^/]+\/heartbeat$/;
+
+/**
+ * Send HSTS only when the request already looks like https. Node behind the
+ * Tailscale TLS proxy sees `http`, and we do not want to pin a plain
+ * `http://127.0.0.1:5173` Vite session. The signals are an https Origin or
+ * Referer, or `X-Forwarded-Proto: https` (first hop). `X-Forwarded-For` stays
+ * untrusted; a forged proto hint can only *add* this header, and browsers
+ * ignore HSTS on a plain http response, so this is the safe simple option.
+ */
+function requestLooksHttps(c: Context): boolean {
+  const proto = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  if (proto === "https") return true;
+  for (const value of [c.req.header("origin"), c.req.header("referer")]) {
+    if (value === undefined || value.trim() === "") continue;
+    try {
+      if (new URL(value).protocol === "https:") return true;
+    } catch {
+      // Ignore unparseable Origin/Referer; they are not a reason to send HSTS.
+    }
+  }
+  return false;
+}
 
 /** The four bot-facing endpoints; everything else is viewer territory. */
 function isBotEndpoint(method: string, path: string): boolean {
@@ -104,9 +126,13 @@ export function createApp({
         c.req.path.startsWith("/api/") ? API_CSP : WEB_CSP,
       );
     }
-    // The Funnel/bot port is HTTP-to-the-process even when Funnel wraps it; HSTS
-    // belongs on the viewer surface (and the single-port app that also serves it).
-    if (surface !== "bot" && !c.res.headers.has("Strict-Transport-Security")) {
+    // The Funnel/bot port stays HSTS-free even with a proto hint; the viewer
+    // surface (and the single-port app) only sends it when the request looks https.
+    if (
+      surface !== "bot" &&
+      requestLooksHttps(c) &&
+      !c.res.headers.has("Strict-Transport-Security")
+    ) {
       c.res.headers.set("Strict-Transport-Security", "max-age=31536000");
     }
   });

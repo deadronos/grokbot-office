@@ -56,7 +56,10 @@ export function sessionRoutes({
     // Logout is never rate-limited: a bad-token flood must not leave a valid cookie in place.
     const secret = getCookie(c, SESSION_COOKIE_NAME);
     if (secret !== undefined) {
-      const session = repo.findSessionByHash(hashToken(secret));
+      // Current or previous hash, at any age: a post-rotation logout with the old
+      // cookie must still revoke the row (and therefore both hashes).
+      const hashed = hashToken(secret);
+      const session = repo.findSessionByHash(hashed) ?? repo.findSessionByPrevHash(hashed);
       if (session && session.revokedAt === null) repo.revokeSession(session.id, nowUtc());
     }
     deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0));

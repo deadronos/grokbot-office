@@ -492,6 +492,61 @@ describe("session rotation", () => {
     ).toBe(401);
   });
 
+  it("revokes both hashes when logging out with the previous cookie inside the grace window", async () => {
+    const { app, db, viewer } = setup();
+    const oldSecret = await sessionOf(app, viewer.token);
+    db.prepare("update sessions set created_at = ?").run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    const res = await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } });
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+
+    const logoutRes = await logout(app, cookieHeader(oldSecret));
+    expect(logoutRes.status).toBe(204);
+    expect(sessionRows(db)[0].revoked_at).not.toBeNull();
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } })).status,
+    ).toBe(401);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } })).status,
+    ).toBe(401);
+  });
+
+  it("revokes the row when logging out with the previous cookie after the grace window", async () => {
+    const context = testSetup({ session: { rotateSec: 1, graceSec: 60 } });
+    cleanups.push(context.close);
+    const viewer = issueToken(context.repo, { kind: "viewer" });
+    const oldSecret = await sessionOf(context.app, viewer.token);
+    context.db
+      .prepare("update sessions set created_at = ?")
+      .run(new Date(Date.now() - 3_600_000).toISOString());
+    const res = await context.app.request("/api/state", {
+      headers: { cookie: cookieHeader(oldSecret) },
+    });
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+    context.db
+      .prepare("update sessions set rotated_at = ?")
+      .run(new Date(Date.now() - 61_000).toISOString());
+
+    // The previous hash is already 401 for reads, but logout must still find and revoke the row.
+    expect(
+      (await context.app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } }))
+        .status,
+    ).toBe(401);
+    expect((await logout(context.app, cookieHeader(oldSecret))).status).toBe(204);
+    expect(sessionRows(context.db).find((row) => row.revoked_at === null)).toBeUndefined();
+    expect(
+      (await context.app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } }))
+        .status,
+    ).toBe(401);
+  });
+
   it("leaves a young cookie alone", async () => {
     const { app, viewer } = setup();
     const secret = await sessionOf(app, viewer.token);
@@ -568,5 +623,30 @@ describe("POST /api/session/logout cross-site guard", () => {
     });
     expect(res.status).toBe(403);
     expect(sessionRows(db)[0].revoked_at).toBeNull();
+  });
+
+  it("does not treat a Host without a port as matching an Origin on a non-default port", async () => {
+    const { app, db, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://office.example:8443",
+      host: "office.example",
+    });
+    expect(res.status).toBe(403);
+    expect(sessionRows(db)[0].revoked_at).toBeNull();
+  });
+
+  it("accepts an Origin when Host carries the same explicit port", async () => {
+    const { app, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://office.example:8443",
+      host: "office.example:8443",
+    });
+    expect(res.status).toBe(204);
   });
 });

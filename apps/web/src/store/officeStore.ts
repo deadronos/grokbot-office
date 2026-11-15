@@ -39,6 +39,8 @@ export type OfficeStore = OfficeData & {
   startStream: () => () => void;
   pageUnloading: boolean;
   setPageUnloading: (value: boolean) => void;
+  onPageHide: () => void;
+  onPageShow: (persisted: boolean) => Promise<void>;
 };
 
 const EMPTY_DATA: OfficeData = { bots: {}, openHandoffs: [], lastEventSeq: 0 };
@@ -285,6 +287,18 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
   pageUnloading: false,
 
   setPageUnloading: (value) => set({ pageUnloading: value }),
+
+  onPageHide: () => set({ pageUnloading: true }),
+
+  // pageshow always clears the flag so a later error can probe again. A bfcache
+  // restore (`event.persisted`) also re-probes: the session may have been revoked
+  // while the page was frozen, and the existing stream will not reconnect itself.
+  onPageShow: async (persisted) => {
+    set({ pageUnloading: false });
+    if (!persisted) return;
+    await get().checkSession();
+    if (get().phase === "ready") get().startStream();
+  },
 
   logout: async () => {
     stopStream?.();

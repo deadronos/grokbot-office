@@ -94,6 +94,11 @@ button, plus the connection indicator:
   `GET /api/state` could not be reached (Mac asleep, server down); a probe that cannot
   reach the server keeps this timer running
 
+A `pagehide` skips the session probe so a reload after rotation does not drop a
+fresh `Set-Cookie`. `pageshow` clears that flag; a back-forward cache restore
+(`event.persisted`) re-probes, so a session revoked in the meantime shows the
+login form.
+
 ## Scripts
 
 | Script              | What it does                      |
@@ -263,7 +268,7 @@ sessions too.
 curl -sS -X POST http://127.0.0.1:8787/api/session \
   -H "Authorization: Bearer $VIEWER_TOKEN" -c jar.txt
 
-# 204; revokes the session and always clears the cookie
+# 204; revokes the session (current or previous cookie hash, at any age) and always clears the cookie
 curl -sS -o /dev/null -X POST http://127.0.0.1:8787/api/session/logout -b jar.txt
 ```
 
@@ -282,19 +287,23 @@ current hash: the response carries a fresh `Set-Cookie` with the remaining TTL, 
 `created_at` stays the login time so the per-token cap still evicts the oldest login.
 The previous hash stays valid for `SESSION_ROTATE_GRACE_SEC` (default 60) and does not
 rotate again, so in-flight requests and a reload that drops a `Set-Cookie` still work.
-After the grace window the previous hash answers `401`. Rotation is compare-and-swap on
-the current hash, so two requests racing at the boundary cannot lock the client out.
-An open `GET /api/stream` never rotates (it cannot read a new cookie) and re-checks the
-session by id, so a rotation does not kill the stream; a revoke, expiry or idle still does.
+After the grace window the previous hash answers `401` on reads. Logout still finds the
+row by current or previous hash at any age and revokes it, so both cookies then get
+`401`. Rotation is compare-and-swap on the current hash, so two requests racing at the
+boundary cannot lock the client out. An open `GET /api/stream` never rotates (it cannot
+read a new cookie) and re-checks the session by id, so a rotation does not kill the
+stream; a revoke, expiry or idle still does.
 
 All three failure modes look the same from outside: a generic
 `401 {"error":"unauthorized"}`, like any other rejected credential.
 
 Cookie-authenticated writes (`POST /api/session/logout`) are checked for CSRF:
 `Sec-Fetch-Site: same-origin` is accepted first. Otherwise a present `Origin` must
-either be in `CORS_ORIGINS` or have the same host[:port] as the `Host` header (scheme
-ignored), so a TLS-terminating proxy — browser `https://` Origin, Node seeing `http://`
-— still matches. A foreign host gets `403 {"error":"forbidden"}` and changes nothing.
+either be in `CORS_ORIGINS` or have the same host and port as the `Host` header (scheme
+ignored). An omitted port uses the Origin scheme's default (443 for `https`, 80 for
+`http`), so `Origin: https://office.example` still matches `Host: office.example` behind
+a TLS proxy, but `https://office.example:8443` does not match a Host without a port.
+A foreign host or a mismatched port gets `403 {"error":"forbidden"}` and changes nothing.
 Requests without `Origin` (curl) and browsers reporting `Sec-Fetch-Site: same-site` are
 allowed. Reads never need an origin, so the viewer keeps working.
 
@@ -311,8 +320,10 @@ Two plus one token-bucket budgets apply: `RATE_LIMIT_PER_MIN` (default 60) with
 `RATE_LIMIT_BURST` (default 20) per authenticated token or session, and
 `RATE_LIMIT_IP_PER_MIN` (default 30) with `RATE_LIMIT_IP_BURST` (default 10) per client
 address for unauthenticated requests that present no credentials. Failed bearer/token
-attempts use a separate bucket with those same IP numbers, and are counted only after
-they fail, so a flood of bad tokens cannot turn a valid or expired cookie into `429`.
+attempts, and unknown or unparseable session cookies, use a separate bucket with those
+same IP numbers, and are counted only after they fail, so a flood of bad tokens or
+garbage cookies cannot turn a valid or expired cookie into `429`. A flood of garbage
+cookies from the same address can `429` itself.
 Logout is not rate-limited: it revokes first (after the CSRF check) so a flood cannot
 leave a live cookie in place. In `VIEWER_TAILNET_ONLY` mode each port has its own
 buckets. A burst above its per-minute budget is rejected at startup. Over the limit the
@@ -326,7 +337,12 @@ Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY
 `Referrer-Policy: no-referrer` and
 `Permissions-Policy: camera=(), microphone=(), geolocation=()`. The viewer surface (and
 the single-port app that also serves it) adds `Strict-Transport-Security: max-age=31536000`
-with no `preload`. `/api` responses add a closed CSP (`default-src 'none'; frame-ancestors
+with no `preload` only when the request already looks like https: an `Origin` or `Referer`
+that is https, or `X-Forwarded-Proto: https`. Node behind the Tailscale TLS proxy still
+sees `http`, and a plain `http://127.0.0.1:5173` Vite session must not be HSTS-pinned.
+`X-Forwarded-For` stays untrusted; a forged proto hint can only add this header, and
+browsers ignore HSTS on a plain http response. The Funnel/bot surface never sends it.
+`/api` responses add a closed CSP (`default-src 'none'; frame-ancestors
 'none'; base-uri 'none'`); the web app is served with a CSP that allows only same-origin
 scripts and styles, with no `unsafe-eval` (`style-src` keeps `'unsafe-inline'` for React's
 style attributes), and `frame-ancestors 'none'`, so the viewer cannot be framed either.
