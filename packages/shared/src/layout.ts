@@ -8,7 +8,7 @@ export type Desk = {
   index: number;
   x: number;
   z: number;
-  /** Radians around Y; 0 faces +z (towards the centre desk). */
+  /** Radians around Y; 0 faces +z, Math.PI faces -z. Pod desks face the centre desk. */
   facing: number;
 };
 
