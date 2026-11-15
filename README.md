@@ -68,6 +68,9 @@ Migrations live in `apps/server/drizzle/` and are applied on server start; the b
 copies them to `apps/server/dist/drizzle/` so the bundled server and CLI find them.
 After changing `apps/server/src/db/schema.ts`, run
 `pnpm --filter @grokbot-office/server db:generate` and commit the new migration.
+SQLite cannot add `CHECK` or foreign-key constraints in place, so such a migration
+rebuilds the table; the migrator runs the whole migration set in one transaction with
+foreign-key enforcement off, and every query after startup runs with it on.
 
 ## Tokens
 
@@ -126,6 +129,44 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots
 set the cadence; the timeout must be larger than the interval, and invalid
 values stop the server at startup. Request bodies on `/api/*` are capped at
 16 KB (`413` beyond that).
+
+## Events
+
+Bots report what they do as event batches: 1–20 events per request, all of them for
+the token's own bot. A batch is applied in one transaction, so it either lands whole
+or not at all. Event ids are ULIDs (or UUIDs); replaying a batch is safe because
+`(bot_id, event_id)` is unique.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8787/api/events \
+  -H "Authorization: Bearer $BOT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"events":[{"botId":"data","eventId":"01JBQ0M0S5R8D6P4W2G7X9K3ZY","type":"task_started","taskId":"issue-6","label":"events endpoint"}]}'
+# 200 {"accepted":1,"duplicates":0,"lastSeq":1}
+```
+
+`lastSeq` is the highest event sequence in the database after the batch; clients
+can use it to resume. `accepted` counts newly stored events, `duplicates` counts
+events that were already there (they change nothing). The batch also counts as a
+heartbeat.
+
+The server derives `bot_status` from the events, in order:
+
+| Event              | Status after it                                                       |
+| ------------------ | --------------------------------------------------------------------- |
+| `status_changed`   | that status, with its `label`                                         |
+| `task_started`     | `working`, `task_id` = the event's                                    |
+| `task_finished`    | `idle`; `task_id` and `label` are cleared                             |
+| `handoff_sent`     | `waiting` with `handoff_to`, unless another task is still open        |
+| `handoff_accepted` | `working` for the receiver; a sender still waiting for it goes `idle` |
+
+`since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
+(`sent` → `accepted`). An event the server cannot apply (a handoff to itself or to an
+unknown bot, a reused `handoffId`, a handoff the bot may not accept) fails the whole
+batch with `422 {"error":"invalid event","index":1}`.
+
+Times are the server's: `received_at` is one timestamp per batch. The client `at`
+is display-only and is clamped to ±10 minutes around it.
 
 ## CI
 
