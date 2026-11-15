@@ -34,7 +34,7 @@ packages/shared    Constants and types shared by server and web
 
 ```bash
 pnpm install
-cp .env.example .env   # placeholders only; edit if needed
+cp .env.example .env   # placeholders only; the server reads it if present
 pnpm dev               # server on http://127.0.0.1:8787, web on http://127.0.0.1:5173
 ```
 
