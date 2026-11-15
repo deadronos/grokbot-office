@@ -476,4 +476,29 @@ describe("applyEvent", () => {
     expect(useOfficeStore.getState().bots.data?.name).toBe("Data");
     expect(useOfficeStore.getState().lastEventSeq).toBe(8);
   });
+
+  it("goes from offline to idle live on a status_changed come-back event", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+
+    source.emit("event", JSON.stringify(streamEvent(8, { type: "offline" })));
+    expect(useOfficeStore.getState().bots.data).toMatchObject({
+      status: "offline",
+      label: undefined,
+      taskId: undefined,
+    });
+
+    // The sweeper's come-back is a status_changed (idle, or an explicit non-offline
+    // status). The reducer already maps that type; no new event type is needed.
+    source.emit(
+      "event",
+      JSON.stringify(streamEvent(9, { type: "status_changed", status: "idle" })),
+    );
+    expect(useOfficeStore.getState().bots.data).toMatchObject({
+      status: "idle",
+      lastEventSeq: 9,
+    });
+    expect(useOfficeStore.getState().lastEventSeq).toBe(9);
+  });
 });
