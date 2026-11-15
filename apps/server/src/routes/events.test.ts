@@ -244,6 +244,55 @@ describe("POST /api/events", () => {
     });
   });
 
+  it("keeps a stored label when status_changed omits one, unless the bot comes to rest", async () => {
+    const { app, repo, dataToken, viewerToken } = setup();
+    const snapshotLabel = async () => {
+      const body = (await (
+        await app.request("/api/state", { headers: auth(viewerToken) })
+      ).json()) as { bots: { id: string; label?: string }[] };
+      return body.bots.find((bot) => bot.id === "data")?.label;
+    };
+
+    await post(
+      app,
+      dataToken,
+      batch(ev(1, "status_changed", { status: "working", label: "coding" })),
+    );
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "working", label: "coding" });
+    expect(await snapshotLabel()).toBe("coding");
+
+    // Omitted on a non-resting status: keep the stored label in the DB and the snapshot.
+    const omitted = await post(
+      app,
+      dataToken,
+      batch(ev(2, "status_changed", { status: "reviewing" })),
+    );
+    expect(omitted.status).toBe(200);
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "reviewing", label: "coding" });
+    expect(await snapshotLabel()).toBe("coding");
+
+    // An explicit label replaces it.
+    await post(
+      app,
+      dataToken,
+      batch(ev(3, "status_changed", { status: "working", label: "refactor" })),
+    );
+    expect(repo.getBotStatus("data")).toMatchObject({ status: "working", label: "refactor" });
+    expect(await snapshotLabel()).toBe("refactor");
+
+    // Coming to rest (idle/offline) still clears links, including the label.
+    await post(app, dataToken, batch(ev(4, "status_changed", { status: "idle" })));
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "idle",
+      label: null,
+      taskId: null,
+      handoffTo: null,
+      handoffId: null,
+      labelHandoffId: null,
+    });
+    expect(await snapshotLabel()).toBeUndefined();
+  });
+
   it("frees the sender only when the handoff it waits on is accepted (side-handoff repro)", async () => {
     const { app, repo, dataToken, wesleyToken } = setup();
     // Sender works on t-primary, sends a side handoff (stays working), then hands off t-primary.

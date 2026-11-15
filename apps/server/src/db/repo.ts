@@ -398,7 +398,14 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
 
           switch (input.type) {
             case "status_changed":
-              change({ status: input.status, label: input.label ?? null });
+              // An omitted label on a non-resting status keeps the stored one
+              // (and its labelHandoffId). Resting statuses still clear links via
+              // RELEASED_LINKS; an explicit label in the same event still wins.
+              change(
+                input.label !== undefined
+                  ? { status: input.status, label: input.label }
+                  : { status: input.status },
+              );
               break;
             case "task_started":
               change({
