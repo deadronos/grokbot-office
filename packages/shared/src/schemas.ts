@@ -12,6 +12,7 @@ import { LABEL_MAX, REF_MAX, sanitizeText } from "./sanitize";
 /** Lowercase slug, e.g. `data` or `wesley`. */
 export const BotId = z
   .string()
+  .max(64, "must be at most 64 characters")
   .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "must be a lowercase slug");
 export type BotId = z.infer<typeof BotId>;
 
@@ -30,28 +31,40 @@ export type EventId = z.infer<typeof EventId>;
 export const IsoDateTime = z.iso.datetime({ offset: true });
 export type IsoDateTime = z.infer<typeof IsoDateTime>;
 
-/** Sanitizes, then length-checks the cleaned text. */
-function sanitizedString(max: number) {
+/** Sanitizes, then length-checks the cleaned text; empty is rejected. */
+function requiredText(max: number) {
   return z
     .string()
     .transform(sanitizeText)
-    .pipe(z.string().max(max, `must be at most ${max} characters`));
+    .pipe(z.string().min(1, "must not be empty").max(max, `must be at most ${max} characters`));
 }
 
-export const Label = sanitizedString(LABEL_MAX);
+/** Sanitizes; text that is empty afterwards counts as omitted. */
+function optionalText(max: number) {
+  return z
+    .string()
+    .transform(sanitizeText)
+    .transform((value) => (value === "" ? undefined : value))
+    .pipe(z.string().max(max, `must be at most ${max} characters`).optional());
+}
+
+export const Label = optionalText(LABEL_MAX);
 export type Label = z.infer<typeof Label>;
 
-export const Ref = sanitizedString(REF_MAX);
+export const Ref = optionalText(REF_MAX);
 export type Ref = z.infer<typeof Ref>;
 
-export const TaskId = z.string().min(1).max(REF_MAX);
+export const TaskId = requiredText(REF_MAX);
 export type TaskId = z.infer<typeof TaskId>;
+
+export const HandoffId = requiredText(REF_MAX);
+export type HandoffId = z.infer<typeof HandoffId>;
 
 export const RegisterBody = z.object({
   id: BotId,
-  name: sanitizedString(40),
-  role: sanitizedString(60),
-  avatar: sanitizedString(60),
+  name: requiredText(40),
+  role: requiredText(60),
+  avatar: requiredText(60),
   pod: podSchema,
 });
 export type RegisterBody = z.infer<typeof RegisterBody>;
@@ -70,15 +83,13 @@ const eventFields = {
   taskId: TaskId.optional(),
 };
 
-const handoffId = z.string().min(1).max(REF_MAX);
-
 /** A client-submitted event; server-only types are rejected. */
 export const EventIn = z.discriminatedUnion("type", [
   z.object({ ...eventFields, type: z.literal("status_changed"), status: botStatusSchema }),
   z.object({ ...eventFields, type: z.literal("task_started") }),
   z.object({ ...eventFields, type: z.literal("task_finished"), result: taskResultSchema }),
-  z.object({ ...eventFields, type: z.literal("handoff_sent"), to: BotId, handoffId }),
-  z.object({ ...eventFields, type: z.literal("handoff_accepted"), handoffId }),
+  z.object({ ...eventFields, type: z.literal("handoff_sent"), to: BotId, handoffId: HandoffId }),
+  z.object({ ...eventFields, type: z.literal("handoff_accepted"), handoffId: HandoffId }),
 ]);
 export type EventIn = z.infer<typeof EventIn>;
 
@@ -105,7 +116,7 @@ export const DeskSchema = z.object({
 export type DeskSchema = z.infer<typeof DeskSchema>;
 
 export const Handoff = z.object({
-  id: z.string().min(1).max(REF_MAX),
+  id: HandoffId,
   fromBotId: BotId,
   toBotId: BotId,
   label: Label.optional(),
@@ -148,7 +159,7 @@ export const StreamEvent = z.object({
   label: Label.optional(),
   ref: Ref.optional(),
   taskId: TaskId.optional(),
-  handoffId: handoffId.optional(),
+  handoffId: HandoffId.optional(),
   to: BotId.optional(),
   result: taskResultSchema.optional(),
   at: IsoDateTime.optional(),
