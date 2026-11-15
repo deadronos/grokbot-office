@@ -1,6 +1,21 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn } from "@grokbot-office/shared";
@@ -131,11 +146,29 @@ export interface Repo {
   touchToken(id: string, lastUsedAt: string): void;
   revokeToken(id: string, revokedAt: string): void;
   insertSession(session: Session): void;
+  /**
+   * Inserts a session in one transaction: first deletes actually-expired rows, then
+   * revokes this token's oldest live sessions until there is room for the cap.
+   * Returns how many live sessions were evicted.
+   */
+  insertSessionCapped(
+    session: Session,
+    maxPerToken: number,
+    now: string,
+    idleCutoff: string,
+  ): number;
   findSessionByHash(hash: string): Session | undefined;
+  findSessionByPrevHash(hash: string): Session | undefined;
+  getSession(id: string): Session | undefined;
   /** Revocation is idempotent: the first timestamp wins. */
   revokeSession(id: string, revokedAt: string): void;
-  /** Lazy cleanup: drops sessions that expired before `before`. */
-  deleteExpiredSessions(before: string): void;
+  /** Moves the idle clock. `createdAt` stays the login time and is the cap eviction order. */
+  touchSession(id: string, lastSeenAt: string): void;
+  /**
+   * Compare-and-swap rotation: only the request that still sees `expectedHash` as current
+   * writes the new hash. `createdAt` is left alone. Returns false if a race already won.
+   */
+  rotateSessionCas(id: string, expectedHash: string, tokenHash: string, now: string): boolean;
   /** Highest `events.seq`, hidden bots included; 0 when empty. */
   lastEventSeq(): number;
   /**
@@ -637,8 +670,43 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     insertSession: (session) => {
       db.insert(sessions).values(session).run();
     },
+    insertSessionCapped: (session, maxPerToken, now, idleCutoff) =>
+      db.transaction((tx) => {
+        // Dead rows never count toward the cap and must not linger: this drops every
+        // session that is already expired, not just the day-old ones the old cleanup took.
+        tx.delete(sessions).where(lte(sessions.expiresAt, now)).run();
+        const active = tx
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(
+            and(
+              eq(sessions.tokenId, session.tokenId),
+              isNull(sessions.revokedAt),
+              gt(sessions.expiresAt, now),
+              // Idle-expired cookies already 401; they must not push a live session out.
+              gte(sessions.lastSeenAt, idleCutoff),
+            ),
+          )
+          // ISO text order is time order, so this is oldest `created_at` first. Sessions
+          // created in the same millisecond tie-break on `rowid`, i.e. insertion order.
+          .orderBy(asc(sessions.createdAt), sql`rowid asc`)
+          .all();
+        const excess = Math.max(0, active.length + 1 - maxPerToken);
+        for (let index = 0; index < excess; index += 1) {
+          // Revoking keeps the evicted cookie on the same generic 401 path as logout.
+          tx.update(sessions)
+            .set({ revokedAt: now })
+            .where(eq(sessions.id, active[index].id))
+            .run();
+        }
+        tx.insert(sessions).values(session).run();
+        return excess;
+      }),
     findSessionByHash: (hash) =>
       db.select().from(sessions).where(eq(sessions.tokenHash, hash)).get(),
+    findSessionByPrevHash: (hash) =>
+      db.select().from(sessions).where(eq(sessions.prevTokenHash, hash)).get(),
+    getSession: (id) => db.select().from(sessions).where(eq(sessions.id, id)).get(),
     revokeSession: (id, revokedAt) => {
       // `expires_at` is the stored ISO text, so time order is text order.
       db.update(sessions)
@@ -646,8 +714,28 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         .where(and(eq(sessions.id, id), isNull(sessions.revokedAt)))
         .run();
     },
-    deleteExpiredSessions: (before) => {
-      db.delete(sessions).where(lt(sessions.expiresAt, before)).run();
+    touchSession: (id, lastSeenAt) => {
+      db.update(sessions).set({ lastSeenAt }).where(eq(sessions.id, id)).run();
+    },
+    rotateSessionCas: (id, expectedHash, tokenHash, now) => {
+      // Same row: the cap count is unchanged. `created_at` stays the login time.
+      const result = db
+        .update(sessions)
+        .set({
+          tokenHash,
+          prevTokenHash: expectedHash,
+          rotatedAt: now,
+          lastSeenAt: now,
+        })
+        .where(
+          and(
+            eq(sessions.id, id),
+            eq(sessions.tokenHash, expectedHash),
+            isNull(sessions.revokedAt),
+          ),
+        )
+        .run();
+      return result.changes === 1;
     },
     lastEventSeq: () => lastEventSeq(db),
     sweepStaleBots: (cutoff, now) =>

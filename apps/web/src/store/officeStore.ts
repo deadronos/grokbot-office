@@ -37,6 +37,10 @@ export type OfficeStore = OfficeData & {
   applySnapshot: (snapshot: StateSnapshot) => void;
   applyEvent: (event: StreamEvent) => void;
   startStream: () => () => void;
+  pageUnloading: boolean;
+  setPageUnloading: (value: boolean) => void;
+  onPageHide: () => void;
+  onPageShow: (persisted: boolean) => Promise<void>;
 };
 
 const EMPTY_DATA: OfficeData = { bots: {}, openHandoffs: [], lastEventSeq: 0 };
@@ -280,6 +284,22 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
     }
   },
 
+  pageUnloading: false,
+
+  setPageUnloading: (value) => set({ pageUnloading: value }),
+
+  onPageHide: () => set({ pageUnloading: true }),
+
+  // pageshow always clears the flag so a later error can probe again. A bfcache
+  // restore (`event.persisted`) also re-probes: the session may have been revoked
+  // while the page was frozen, and the existing stream will not reconnect itself.
+  onPageShow: async (persisted) => {
+    set({ pageUnloading: false });
+    if (!persisted) return;
+    await get().checkSession();
+    if (get().phase === "ready") get().startStream();
+  },
+
   logout: async () => {
     stopStream?.();
     stopStream = undefined;
@@ -316,7 +336,9 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
 
     /** EventSource hides the HTTP status, so the store asks `/api/state` instead. */
     async function probeSession(): Promise<void> {
-      if (probing) return;
+      // pagehide/unload fires EventSource.onerror; a probe would rotate the cookie
+      // and the browser would drop the Set-Cookie, leaving the next page with the old one.
+      if (probing || get().pageUnloading) return;
       probing = true;
       try {
         const response = await fetch(STATE_PATH, { credentials: "same-origin" });

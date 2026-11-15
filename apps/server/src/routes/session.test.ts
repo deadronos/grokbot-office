@@ -54,8 +54,12 @@ const sessionRows = (db: Context["db"]) =>
     id: string;
     token_hash: string;
     token_id: string;
+    created_at: string;
+    last_seen_at: string;
     expires_at: string;
     revoked_at: string | null;
+    prev_token_hash: string | null;
+    rotated_at: string | null;
   }[];
 
 describe("POST /api/session", () => {
@@ -128,15 +132,18 @@ describe("POST /api/session", () => {
     expect((await postSession(app, viewer.token)).status).toBe(401);
   });
 
-  it("lazily deletes sessions that expired over a day ago", async () => {
+  it("prunes every expired session when it creates a new one", async () => {
     const { app, db, viewer, repo } = setup();
     repo.insertSession({
       id: "old-session",
       tokenHash: hashToken("old-secret"),
       tokenId: viewer.id,
       createdAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
       expiresAt: "2026-01-02T00:00:00.000Z",
       revokedAt: null,
+      prevTokenHash: null,
+      rotatedAt: null,
     });
     expect(sessionRows(db)).toHaveLength(1);
 
@@ -144,6 +151,84 @@ describe("POST /api/session", () => {
     const ids = sessionRows(db).map((row) => row.id);
     expect(ids).not.toContain("old-session");
     expect(ids).toHaveLength(1);
+  });
+
+  it("caps sessions per token and evicts the oldest, leaving other tokens alone", async () => {
+    const context = testSetup({ session: { maxPerToken: 2 } });
+    cleanups.push(context.close);
+    const { app, db, repo } = context;
+    const viewer = issueToken(repo, { kind: "viewer" });
+    const other = issueToken(repo, { kind: "viewer" });
+
+    const first = await sessionOf(app, viewer.token);
+    const second = await sessionOf(app, viewer.token);
+    const otherSession = await sessionOf(app, other.token);
+    const third = await sessionOf(app, viewer.token);
+
+    const state = (cookie: string) => app.request("/api/state", { headers: { cookie } });
+    // The oldest cookie is revoked; the two newer ones still work, and so does the other token.
+    expect((await state(cookieHeader(first))).status).toBe(401);
+    expect((await state(cookieHeader(second))).status).toBe(200);
+    expect((await state(cookieHeader(third))).status).toBe(200);
+    expect((await state(cookieHeader(otherSession))).status).toBe(200);
+
+    const revoked = sessionRows(db).filter((row) => row.revoked_at !== null);
+    expect(revoked).toHaveLength(1);
+  });
+
+  it("does not count revoked sessions against the cap", async () => {
+    const context = testSetup({ session: { maxPerToken: 2 } });
+    cleanups.push(context.close);
+    const { app, db, repo } = context;
+    const viewer = issueToken(repo, { kind: "viewer" });
+
+    const first = await sessionOf(app, viewer.token);
+    const second = await sessionOf(app, viewer.token);
+    repo.revokeSession(sessionRows(db)[0].id, new Date().toISOString());
+
+    const third = await sessionOf(app, viewer.token);
+
+    const state = (cookie: string) => app.request("/api/state", { headers: { cookie } });
+    expect((await state(cookieHeader(first))).status).toBe(401);
+    expect((await state(cookieHeader(second))).status).toBe(200);
+    expect((await state(cookieHeader(third))).status).toBe(200);
+  });
+
+  it("does not count idle sessions against the cap", async () => {
+    const context = testSetup({ session: { maxPerToken: 2, idleSec: 60 } });
+    cleanups.push(context.close);
+    const { app, db, repo } = context;
+    const viewer = issueToken(repo, { kind: "viewer" });
+
+    const first = await sessionOf(app, viewer.token);
+    const second = await sessionOf(app, viewer.token);
+    const oldest = sessionRows(db).toSorted((a, b) => a.created_at.localeCompare(b.created_at))[0];
+    db.prepare("update sessions set last_seen_at = ? where id = ?").run(
+      "2000-01-01T00:00:00.000Z",
+      oldest.id,
+    );
+
+    const third = await sessionOf(app, viewer.token);
+
+    const state = (cookie: string) => app.request("/api/state", { headers: { cookie } });
+    // The idle cookie is already 401; a new one must not evict the still-active second.
+    expect((await state(cookieHeader(first))).status).toBe(401);
+    expect((await state(cookieHeader(second))).status).toBe(200);
+    expect((await state(cookieHeader(third))).status).toBe(200);
+    const idle = sessionRows(db).find((row) => row.id === oldest.id);
+    expect(idle?.revoked_at).toBeNull();
+  });
+
+  it("keeps five sessions by default", async () => {
+    const { app, viewer } = setup();
+    const cookies: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      cookies.push(cookieHeader(await sessionOf(app, viewer.token)));
+    }
+
+    const state = (cookie: string) => app.request("/api/state", { headers: { cookie } });
+    expect((await state(cookies[0])).status).toBe(401);
+    expect((await state(cookies[5])).status).toBe(200);
   });
 });
 
@@ -246,5 +331,322 @@ describe("POST /api/session/logout", () => {
   it("ignores an unknown cookie", async () => {
     const { app } = setup();
     expect((await logout(app, cookieHeader("not-a-real-secret"))).status).toBe(204);
+  });
+});
+
+describe("session idle timeout", () => {
+  it("refuses a session whose last_seen_at is older than the idle window", async () => {
+    const { app, db, viewer } = setup();
+    const cookie = cookieHeader(await sessionOf(app, viewer.token));
+    db.prepare("update sessions set last_seen_at = ?").run("2000-01-01T00:00:00.000Z");
+
+    const res = await app.request("/api/state", { headers: { cookie } });
+    expect(res.status).toBe(401);
+    expect((await res.json()) as object).toEqual({ error: "unauthorized" });
+  });
+
+  it("refreshes last_seen_at on every authenticated read", async () => {
+    const { app, db, viewer } = setup();
+    const cookie = cookieHeader(await sessionOf(app, viewer.token));
+    // Half an hour old: inside the idle window, so the request goes through and refreshes it.
+    const stale = new Date(Date.now() - 1_800_000).toISOString();
+    db.prepare("update sessions set last_seen_at = ?").run(stale);
+
+    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
+    expect(Date.parse(sessionRows(db)[0].last_seen_at)).toBeGreaterThan(Date.parse(stale));
+  });
+
+  it("honours a configured idle window", async () => {
+    const context = testSetup({ session: { idleSec: 10 } });
+    cleanups.push(context.close);
+    const viewer = issueToken(context.repo, { kind: "viewer" });
+    const cookie = cookieHeader(await sessionOf(context.app, viewer.token));
+    context.db
+      .prepare("update sessions set last_seen_at = ?")
+      .run(new Date(Date.now() - 11_000).toISOString());
+
+    expect((await context.app.request("/api/state", { headers: { cookie } })).status).toBe(401);
+  });
+});
+
+describe("session rotation", () => {
+  it("swaps in a new secret on a request once the cookie is old enough", async () => {
+    const { app, db, viewer } = setup();
+    const oldSecret = await sessionOf(app, viewer.token);
+    // Older than SESSION_ROTATE_SEC, still inside the idle window and the TTL.
+    const loginAt = new Date(Date.now() - 3_600_000).toISOString();
+    db.prepare("update sessions set created_at = ?").run(loginAt);
+
+    const res = await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } });
+    expect(res.status).toBe(200);
+
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    expect(raw).toBeDefined();
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+    expect(rotated).not.toBe(oldSecret);
+    // Same row: the cap is untouched. created_at stays the login time.
+    expect(sessionRows(db)).toHaveLength(1);
+    expect(sessionRows(db)[0].token_hash).toBe(hashToken(rotated));
+    expect(sessionRows(db)[0].created_at).toBe(loginAt);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } })).status,
+    ).toBe(200);
+    // The previous hash stays valid for the grace window and must not rotate again.
+    const replay = await app.request("/api/state", {
+      headers: { cookie: cookieHeader(oldSecret) },
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.headers.getSetCookie()).toHaveLength(0);
+    expect(sessionRows(db)[0].token_hash).toBe(hashToken(rotated));
+  });
+
+  it("accepts parallel requests with the old cookie at the rotation boundary", async () => {
+    const { app, db, viewer } = setup();
+    const oldSecret = await sessionOf(app, viewer.token);
+    db.prepare("update sessions set created_at = ?").run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    const cookie = cookieHeader(oldSecret);
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => app.request("/api/state", { headers: { cookie } })),
+    );
+    expect(results.map((res) => res.status)).toEqual([200, 200, 200, 200, 200]);
+  });
+
+  it("refuses the previous hash once the grace window has passed", async () => {
+    const context = testSetup({ session: { rotateSec: 1, graceSec: 60 } });
+    cleanups.push(context.close);
+    const viewer = issueToken(context.repo, { kind: "viewer" });
+    const oldSecret = await sessionOf(context.app, viewer.token);
+    context.db
+      .prepare("update sessions set created_at = ?")
+      .run(new Date(Date.now() - 3_600_000).toISOString());
+
+    const res = await context.app.request("/api/state", {
+      headers: { cookie: cookieHeader(oldSecret) },
+    });
+    expect(res.status).toBe(200);
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+
+    context.db
+      .prepare("update sessions set rotated_at = ?")
+      .run(new Date(Date.now() - 61_000).toISOString());
+
+    expect(
+      (await context.app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } }))
+        .status,
+    ).toBe(401);
+    expect(
+      (await context.app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } }))
+        .status,
+    ).toBe(200);
+  });
+
+  it("revokes and logout invalidate both the current and previous hashes", async () => {
+    const { app, db, repo, viewer } = setup();
+    const oldSecret = await sessionOf(app, viewer.token);
+    db.prepare("update sessions set created_at = ?").run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    const res = await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } });
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+
+    const id = sessionRows(db)[0].id;
+    repo.revokeSession(id, new Date().toISOString());
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } })).status,
+    ).toBe(401);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } })).status,
+    ).toBe(401);
+
+    // A fresh session, rotated, then logged out with the new cookie also kills the previous hash.
+    const nextOld = await sessionOf(app, viewer.token);
+    db.prepare("update sessions set created_at = ? where revoked_at is null").run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    const rotatedRes = await app.request("/api/state", {
+      headers: { cookie: cookieHeader(nextOld) },
+    });
+    const nextRaw = rotatedRes.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const nextRotated = decodeURIComponent(
+      nextRaw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1),
+    );
+    expect((await logout(app, cookieHeader(nextRotated))).status).toBe(204);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(nextOld) } })).status,
+    ).toBe(401);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(nextRotated) } })).status,
+    ).toBe(401);
+  });
+
+  it("revokes both hashes when logging out with the previous cookie inside the grace window", async () => {
+    const { app, db, viewer } = setup();
+    const oldSecret = await sessionOf(app, viewer.token);
+    db.prepare("update sessions set created_at = ?").run(
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    const res = await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } });
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+
+    const logoutRes = await logout(app, cookieHeader(oldSecret));
+    expect(logoutRes.status).toBe(204);
+    expect(sessionRows(db)[0].revoked_at).not.toBeNull();
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } })).status,
+    ).toBe(401);
+    expect(
+      (await app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } })).status,
+    ).toBe(401);
+  });
+
+  it("revokes the row when logging out with the previous cookie after the grace window", async () => {
+    const context = testSetup({ session: { rotateSec: 1, graceSec: 60 } });
+    cleanups.push(context.close);
+    const viewer = issueToken(context.repo, { kind: "viewer" });
+    const oldSecret = await sessionOf(context.app, viewer.token);
+    context.db
+      .prepare("update sessions set created_at = ?")
+      .run(new Date(Date.now() - 3_600_000).toISOString());
+    const res = await context.app.request("/api/state", {
+      headers: { cookie: cookieHeader(oldSecret) },
+    });
+    const raw = res.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const rotated = decodeURIComponent(raw!.split(";")[0].slice(SESSION_COOKIE_NAME.length + 1));
+    context.db
+      .prepare("update sessions set rotated_at = ?")
+      .run(new Date(Date.now() - 61_000).toISOString());
+
+    // The previous hash is already 401 for reads, but logout must still find and revoke the row.
+    expect(
+      (await context.app.request("/api/state", { headers: { cookie: cookieHeader(oldSecret) } }))
+        .status,
+    ).toBe(401);
+    expect((await logout(context.app, cookieHeader(oldSecret))).status).toBe(204);
+    expect(sessionRows(context.db).find((row) => row.revoked_at === null)).toBeUndefined();
+    expect(
+      (await context.app.request("/api/state", { headers: { cookie: cookieHeader(rotated) } }))
+        .status,
+    ).toBe(401);
+  });
+
+  it("leaves a young cookie alone", async () => {
+    const { app, viewer } = setup();
+    const secret = await sessionOf(app, viewer.token);
+    const res = await app.request("/api/state", { headers: { cookie: cookieHeader(secret) } });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.getSetCookie()).toHaveLength(0);
+  });
+});
+
+const postLogout = (app: App, headers: Record<string, string>) =>
+  app.request("/api/session/logout", { method: "POST", headers });
+
+describe("POST /api/session/logout cross-site guard", () => {
+  it("refuses a foreign Origin without revoking the session", async () => {
+    const { app, db, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://evil.example",
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()) as object).toEqual({ error: "forbidden" });
+    expect(sessionRows(db)[0].revoked_at).toBeNull();
+  });
+
+  it("accepts its own Origin, a same-site fetch, and a client that sends neither", async () => {
+    const { app, viewer } = setup();
+    const trusted: Record<string, string>[] = [
+      { origin: "http://localhost" },
+      { "sec-fetch-site": "same-origin" },
+      {},
+    ];
+    for (const headers of trusted) {
+      const { secret } = sessionCookie(await postSession(app, viewer.token));
+      const res = await postLogout(app, { cookie: cookieHeader(secret), ...headers });
+      expect(res.status).toBe(204);
+    }
+  });
+
+  it("refuses a cross-site fetch without an Origin", async () => {
+    const { app, db, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      "sec-fetch-site": "cross-site",
+    });
+    expect(res.status).toBe(403);
+    expect(sessionRows(db)[0].revoked_at).toBeNull();
+  });
+
+  it("accepts an https Origin when the Host header matches, ignoring the scheme", async () => {
+    const { app, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://office.example",
+      host: "office.example",
+    });
+    expect(res.status).toBe(204);
+  });
+
+  it("refuses a foreign https Origin even when Host is the viewer", async () => {
+    const { app, db, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://evil.example",
+      host: "office.example",
+    });
+    expect(res.status).toBe(403);
+    expect(sessionRows(db)[0].revoked_at).toBeNull();
+  });
+
+  it("does not treat a Host without a port as matching an Origin on a non-default port", async () => {
+    const { app, db, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://office.example:8443",
+      host: "office.example",
+    });
+    expect(res.status).toBe(403);
+    expect(sessionRows(db)[0].revoked_at).toBeNull();
+  });
+
+  it("accepts an Origin when Host carries the same explicit port", async () => {
+    const { app, viewer } = setup();
+    const { secret } = sessionCookie(await postSession(app, viewer.token));
+
+    const res = await postLogout(app, {
+      cookie: cookieHeader(secret),
+      origin: "https://office.example:8443",
+      host: "office.example:8443",
+    });
+    expect(res.status).toBe(204);
   });
 });

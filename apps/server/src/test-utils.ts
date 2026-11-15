@@ -1,7 +1,15 @@
 import { createApp } from "./app.ts";
-import { DEFAULT_SESSION_TTL_SEC, type HeartbeatConfig, resolveHeartbeatConfig } from "./config.ts";
+import {
+  DEFAULT_SESSION_TTL_SEC,
+  type HeartbeatConfig,
+  type SessionConfig,
+  resolveHeartbeatConfig,
+  resolveRateLimitConfig,
+  resolveSessionConfig,
+} from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
+import { createRateLimits } from "./rate-limit.ts";
 import type { StreamConfig } from "./routes/stream.ts";
 import { createStreamHub } from "./stream/hub.ts";
 
@@ -26,22 +34,31 @@ export function testSetup({
   adminToken = TEST_ADMIN_TOKEN,
   heartbeat = resolveHeartbeatConfig({}),
   sessionTtlSec = DEFAULT_SESSION_TTL_SEC,
+  session,
   stream,
 }: {
   adminToken?: string;
   heartbeat?: HeartbeatConfig;
   sessionTtlSec?: number;
+  session?: Partial<SessionConfig>;
   stream?: StreamConfig;
 } = {}) {
   const db = openDatabase(":memory:");
   const repo = createSqliteRepo(db);
   const hub = createStreamHub();
+  // Far above what any existing test sends, so only the session/rate-limit tests trip it.
+  const limits = createRateLimits(resolveRateLimitConfig({ RATE_LIMIT_PER_MIN: "1000000" }));
   const app = createApp({
     repo,
     adminToken,
     heartbeat,
     hub,
-    sessionTtlSec,
+    limits,
+    session: {
+      ...resolveSessionConfig({ SESSION_TTL_SEC: String(sessionTtlSec) }),
+      ...session,
+      ttlSec: session?.ttlSec ?? sessionTtlSec,
+    },
     stream,
   });
   // Ending streams first stops their ping timers, so no test leaks a timer.

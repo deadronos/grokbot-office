@@ -3,15 +3,23 @@ import { Hono } from "hono";
 import type { StateSnapshot } from "@grokbot-office/shared";
 
 import type { AppEnv } from "../auth/middleware.ts";
-import { requireViewer } from "../auth/middleware.ts";
+import { requireViewer, type ViewerSessionPolicy } from "../auth/middleware.ts";
 import type { Repo } from "../db/repo.ts";
 import { compareByLayout, toBotSnapshot, toHandoff } from "./mappers.ts";
 
 /** Viewer snapshot: who is where and doing what, plus the event high-water mark. */
-export function stateRoutes({ repo, adminToken }: { repo: Repo; adminToken: string | undefined }) {
+export function stateRoutes({
+  repo,
+  adminToken,
+  policy,
+}: {
+  repo: Repo;
+  adminToken: string | undefined;
+  policy: ViewerSessionPolicy;
+}) {
   const api = new Hono<AppEnv>();
 
-  api.get("/", requireViewer({ repo, adminToken }), (c) => {
+  api.get("/", requireViewer({ repo, adminToken, policy }), (c) => {
     // The snapshot takes no parameters; anything in the query is a client bug.
     if (new URL(c.req.url).search !== "") return c.json({ error: "invalid query" }, 400);
     const snapshot = repo.getSnapshot();

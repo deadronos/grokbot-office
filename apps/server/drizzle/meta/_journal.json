@@ -50,6 +50,13 @@
       "when": 1794738359073,
       "tag": "0006_events_scrub_index",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794742427580,
+      "tag": "0007_session_idle_and_rotation",
+      "breakpoints": true
     }
   ]
 }

@@ -40,6 +40,19 @@ export function App() {
     return startStream();
   }, [phase, startStream]);
 
+  useEffect(() => {
+    const onHide = () => useOfficeStore.getState().onPageHide();
+    const onShow = (event: PageTransitionEvent) => {
+      void useOfficeStore.getState().onPageShow(event.persisted);
+    };
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("pageshow", onShow);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("pageshow", onShow);
+    };
+  }, []);
+
   return (
     <main className="app">
       <h1 className="app-title">{APP_NAME}</h1>

@@ -102,6 +102,7 @@ function resetStore(): void {
     connection: "reconnecting",
     pending: false,
     error: null,
+    pageUnloading: false,
   });
 }
 
@@ -385,6 +386,49 @@ describe("stream", () => {
     expect(state.bots).toEqual({});
     expect(state.lastEventSeq).toBe(0);
     expect(state.error).toBeNull();
+  });
+
+  it("does not probe the session when the page is unloading", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    fetchMock.mockClear();
+    const source = startStream();
+    source.emit("open");
+
+    useOfficeStore.getState().setPageUnloading(true);
+    source.emit("error");
+    await Promise.resolve();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useOfficeStore.getState().phase).toBe("ready");
+    expect(source.closed).toBe(false);
+  });
+
+  it("resets the unload flag on pageshow and re-probes a persisted page", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+    source.emit("open");
+    fetchMock.mockClear();
+
+    useOfficeStore.getState().onPageHide();
+    expect(useOfficeStore.getState().pageUnloading).toBe(true);
+    source.emit("error");
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await useOfficeStore.getState().onPageShow(false);
+    expect(useOfficeStore.getState().pageUnloading).toBe(false);
+    expect(useOfficeStore.getState().phase).toBe("ready");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    useOfficeStore.getState().onPageHide();
+    fetchMock.mockResolvedValueOnce(emptyResponse(401));
+    await useOfficeStore.getState().onPageShow(true);
+
+    expect(useOfficeStore.getState().pageUnloading).toBe(false);
+    expect(useOfficeStore.getState().phase).toBe("login");
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/state", { credentials: "same-origin" });
   });
 
   it("re-renders one bot without touching the others", async () => {

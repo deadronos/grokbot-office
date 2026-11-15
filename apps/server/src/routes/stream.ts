@@ -1,15 +1,13 @@
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { getCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
 import type { AppEnv } from "../auth/middleware.ts";
-import { requireViewer, validateViewer } from "../auth/middleware.ts";
-import { SESSION_COOKIE_NAME } from "../auth/session.ts";
+import { requireViewer, validateViewer, type ViewerSessionPolicy } from "../auth/middleware.ts";
 import type { Repo } from "../db/repo.ts";
 import type { StreamHub } from "../stream/hub.ts";
-import { nowUtc } from "../time.ts";
+import { nowUtc, toUtc } from "../time.ts";
 import { toStreamEvent } from "./mappers.ts";
 
 /** One drain page; the same cap as the replay endpoint's largest page. */
@@ -68,25 +66,30 @@ export function streamRoutes({
   repo,
   adminToken,
   hub,
+  policy,
   config = DEFAULT_STREAM_CONFIG,
 }: {
   repo: Repo;
   adminToken: string | undefined;
   hub: StreamHub;
+  policy: ViewerSessionPolicy;
   config?: StreamConfig;
 }) {
   const api = new Hono<AppEnv>();
 
-  api.get("/", requireViewer({ repo, adminToken }), (c) => {
+  // No rotation here: this response is one long connection, so a new cookie could not
+  // reach it. Pings still refresh `last_seen_at` and re-check the credential.
+  api.get("/", requireViewer({ repo, adminToken, policy, rotate: false }), (c) => {
     const parsed = parseStreamCursor(c);
     if (!parsed) return c.json({ error: "invalid query" }, 400);
     if (hub.size() >= config.maxClients) {
       return c.json({ error: "too many streams" }, 503);
     }
 
-    // Captured once: every ping re-checks the very credential the stream opened with.
+    // Captured once. Cookie streams are re-checked by session id so a rotation
+    // cannot kill the open connection; bearer streams still re-check the header.
     const header = c.req.header("authorization");
-    const secret = getCookie(c, SESSION_COOKIE_NAME);
+    const sessionId = c.get("session")?.id;
     // A cursor past the newest event (e.g. after a DB reset) is clamped to it, so the
     // client goes live instead of waiting for ids it will never see.
     const latest = repo.lastEventSeq();
@@ -158,11 +161,39 @@ export function streamRoutes({
       // frame then finds a timer to clear instead of leaking one.
       timer = setInterval(() => {
         if (stopped) return;
-        // A session can expire or be revoked, and a token can die: pings are the check.
-        const check = validateViewer({ repo, adminToken, header, secret, now: nowUtc() });
-        if (!check.ok) {
-          stop();
-          return;
+        // A session can expire, go idle or be revoked, and a token can die: pings are the check.
+        const now = nowUtc();
+        if (sessionId !== undefined) {
+          const session = repo.getSession(sessionId);
+          const idleCutoff = toUtc(new Date(Date.parse(now) - policy.idleSec * 1000));
+          const token = session ? repo.getToken(session.tokenId) : undefined;
+          if (
+            !session ||
+            session.revokedAt !== null ||
+            session.expiresAt <= now ||
+            session.lastSeenAt < idleCutoff ||
+            !token ||
+            token.revokedAt !== null
+          ) {
+            stop();
+            return;
+          }
+          // An open stream is activity: a live tab with a stream never goes idle (intended).
+          repo.touchSession(session.id, now);
+        } else {
+          const check = validateViewer({
+            repo,
+            adminToken,
+            header,
+            secret: undefined,
+            now,
+            idleSec: policy.idleSec,
+            graceSec: policy.graceSec,
+          });
+          if (!check.ok) {
+            stop();
+            return;
+          }
         }
         stream.writeSSE({ event: "ping", data: "{}" }).catch(stop);
       }, config.pingIntervalMs);
