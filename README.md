@@ -112,7 +112,7 @@ curl -sS -X POST http://127.0.0.1:8787/api/bots/register \
 
 Heartbeat (keep-alive; the optional `status` is one of `idle`, `working`,
 `waiting`, `reviewing`, `offline`; an empty body is fine). A bot with no heartbeat
-for `timeoutSec` counts as offline:
+for `timeoutSec` counts as offline (marked by the heartbeat sweeper, #9):
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots/data/heartbeat \
