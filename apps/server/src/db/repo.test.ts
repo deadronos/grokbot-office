@@ -1,4 +1,9 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
+
 import { openDatabase } from "./database.ts";
 import { createSqliteRepo } from "./repo.ts";
 
@@ -140,5 +145,34 @@ describe("SQLite repository", () => {
       "last_used_at",
       "revoked_at",
     ]);
+  });
+  it("stores bots without a desk and events without a client timestamp", () => {
+    const { repo } = setup();
+    repo.upsertBot({ ...bot("guest"), deskIndex: null });
+    expect(repo.getBot("guest")?.deskIndex).toBeNull();
+    const result = repo.insertEvent({
+      eventId: "01JD7X5K2M3Q8V9R4T6Y0ZB1AC",
+      botId: "guest",
+      type: "task_started",
+      receivedAt: now,
+    });
+    expect(result.duplicate).toBe(false);
+    expect(repo.listEventsSince(0)[0]?.clientAt).toBeNull();
+  });
+  it("opens file databases in WAL mode and re-applies migrations idempotently", () => {
+    const dir = mkdtempSync(join(tmpdir(), "grokbot-office-db-"));
+    try {
+      const path = join(dir, "nested", "bot-office.db");
+      const first = openDatabase(path);
+      expect(first.pragma("journal_mode", { simple: true })).toBe("wal");
+      expect(first.pragma("foreign_keys", { simple: true })).toBe(1);
+      createSqliteRepo(first).upsertBot(bot("a"));
+      first.close();
+      const second = openDatabase(path);
+      expect(createSqliteRepo(second).listBots()).toHaveLength(1);
+      second.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

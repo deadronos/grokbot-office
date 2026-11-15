@@ -13,8 +13,8 @@ export const bots = sqliteTable("bots", {
   role: text("role").notNull(),
   avatar: text("avatar").notNull(),
   pod: text("pod", { enum: PODS }).notNull(),
-  deskIndex: integer("desk_index").notNull(),
-  hidden: integer("hidden", { mode: "boolean" }).notNull(),
+  deskIndex: integer("desk_index"),
+  hidden: integer("hidden", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -49,7 +49,7 @@ export const events = sqliteTable(
     handoffId: text("handoff_id"),
     toBotId: text("to_bot_id").references(() => bots.id),
     result: text("result", { enum: TASK_RESULTS }),
-    clientAt: text("client_at").notNull(),
+    clientAt: text("client_at"),
     receivedAt: text("received_at").notNull(),
   },
   (t) => [
@@ -68,7 +68,7 @@ export const handoffs = sqliteTable(
     toBotId: text("to_bot_id")
       .notNull()
       .references(() => bots.id),
-    label: text("label").notNull(),
+    label: text("label"),
     state: text("state", { enum: HANDOFF_STATES }).notNull(),
     sentAt: text("sent_at").notNull(),
     acceptedAt: text("accepted_at"),

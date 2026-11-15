@@ -18,8 +18,8 @@ CREATE TABLE `bots` (
 	`role` text NOT NULL,
 	`avatar` text NOT NULL,
 	`pod` text NOT NULL,
-	`desk_index` integer NOT NULL,
-	`hidden` integer NOT NULL,
+	`desk_index` integer,
+	`hidden` integer DEFAULT false NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );
@@ -35,7 +35,7 @@ CREATE TABLE `events` (
 	`handoff_id` text,
 	`to_bot_id` text,
 	`result` text,
-	`client_at` text NOT NULL,
+	`client_at` text,
 	`received_at` text NOT NULL,
 	FOREIGN KEY (`bot_id`) REFERENCES `bots`(`id`) ON UPDATE no action ON DELETE no action,
 	FOREIGN KEY (`to_bot_id`) REFERENCES `bots`(`id`) ON UPDATE no action ON DELETE no action
@@ -48,7 +48,7 @@ CREATE TABLE `handoffs` (
 	`id` text PRIMARY KEY NOT NULL,
 	`from_bot_id` text NOT NULL,
 	`to_bot_id` text NOT NULL,
-	`label` text NOT NULL,
+	`label` text,
 	`state` text NOT NULL,
 	`sent_at` text NOT NULL,
 	`accepted_at` text,
