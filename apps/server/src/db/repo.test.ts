@@ -1,0 +1,144 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { openDatabase } from "./database.ts";
+import { createSqliteRepo } from "./repo.ts";
+
+const now = "2026-01-01T00:00:00.000Z";
+const bot = (id: string) => ({
+  id,
+  name: id,
+  role: "worker",
+  avatar: "robot",
+  pod: "dev" as const,
+  deskIndex: 0,
+  hidden: false,
+  createdAt: now,
+  updatedAt: now,
+});
+const databases: ReturnType<typeof openDatabase>[] = [];
+function setup() {
+  const db = openDatabase(":memory:");
+  databases.push(db);
+  return { db, repo: createSqliteRepo(db) };
+}
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+});
+
+describe("SQLite repository", () => {
+  it("applies migrations and enforces foreign keys", () => {
+    const { db } = setup();
+    const names = db
+      .prepare("select name from sqlite_master where type in ('table', 'index')")
+      .all() as { name: string }[];
+    expect(names.map((row) => row.name)).toEqual(
+      expect.arrayContaining([
+        "bots",
+        "bot_status",
+        "events",
+        "handoffs",
+        "tokens",
+        "events_bot_id_event_id_unique",
+        "events_received_at_idx",
+        "events_bot_id_seq_idx",
+        "bot_status_last_heartbeat_at_idx",
+        "handoffs_to_bot_id_state_idx",
+        "tokens_hash_unique",
+        "tokens_bot_id_idx",
+      ]),
+    );
+    expect(() =>
+      db
+        .prepare(
+          "insert into bot_status (bot_id, status, since, last_heartbeat_at) values ('missing', 'idle', ?, ?)",
+        )
+        .run(now, now),
+    ).toThrow();
+  });
+  it("upserts bots and status", () => {
+    const { repo } = setup();
+    repo.upsertBot(bot("a"));
+    repo.upsertBot({ ...bot("a"), name: "updated" });
+    expect(repo.getBot("a")?.name).toBe("updated");
+    expect(repo.listBots()).toHaveLength(1);
+    const status = {
+      botId: "a",
+      status: "idle" as const,
+      label: null,
+      taskId: null,
+      handoffTo: null,
+      since: now,
+      lastHeartbeatAt: now,
+      lastEventSeq: null,
+    };
+    repo.setBotStatus(status);
+    expect(repo.getBotStatus("a")).toEqual(status);
+  });
+  it("deduplicates events per bot and assigns increasing sequence numbers", () => {
+    const { repo } = setup();
+    repo.upsertBot(bot("a"));
+    repo.upsertBot(bot("b"));
+    const event = {
+      eventId: "event",
+      botId: "a",
+      type: "task_started" as const,
+      label: null,
+      ref: null,
+      taskId: null,
+      handoffId: null,
+      toBotId: null,
+      result: null,
+      clientAt: now,
+      receivedAt: now,
+    };
+    const first = repo.insertEvent(event);
+    expect(first).toEqual({ duplicate: false, seq: 1 });
+    expect(repo.insertEvent(event)).toEqual({ duplicate: true, seq: 1 });
+    const second = repo.insertEvent({ ...event, botId: "b" });
+    expect(second.duplicate).toBe(false);
+    expect(second.seq).toBeGreaterThan(first.seq);
+    expect(repo.listEventsSince(first.seq).map((row) => row.botId)).toEqual(["b"]);
+  });
+  it("creates and updates handoffs and stores token hashes", () => {
+    const { db, repo } = setup();
+    repo.upsertBot(bot("a"));
+    repo.upsertBot(bot("b"));
+    const handoff = {
+      id: "h",
+      fromBotId: "a",
+      toBotId: "b",
+      label: "work",
+      state: "sent" as const,
+      sentAt: now,
+      acceptedAt: null,
+    };
+    repo.createHandoff(handoff);
+    repo.updateHandoffState("h", "accepted", now);
+    expect(repo.getHandoff("h")).toEqual({ ...handoff, state: "accepted", acceptedAt: now });
+    const token = {
+      id: "t",
+      kind: "bot" as const,
+      botId: "a",
+      prefix: "12345678",
+      hash: "hash-value",
+      createdAt: now,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    repo.insertToken(token);
+    expect(repo.findTokenByHash(token.hash)).toEqual(token);
+    repo.revokeToken("t", now);
+    expect(repo.findTokenByHash(token.hash)?.revokedAt).toBe(now);
+    expect(
+      (db.prepare("pragma table_info(tokens)").all() as { name: string }[]).map((c) => c.name),
+    ).toEqual([
+      "id",
+      "kind",
+      "bot_id",
+      "prefix",
+      "hash",
+      "created_at",
+      "last_used_at",
+      "revoked_at",
+    ]);
+  });
+});
