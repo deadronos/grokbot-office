@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ADMIN_TOKEN_MIN_LENGTH,
   extractBearerToken,
   generateToken,
   hashToken,
@@ -38,11 +39,25 @@ describe("token primitives", () => {
     expect(secretsEqual("short", "a-much-longer-value")).toBe(false);
   });
 
-  it("refuses to treat the placeholder admin token as usable", () => {
+  it("refuses to treat a short or placeholder admin token as usable", () => {
+    expect(ADMIN_TOKEN_MIN_LENGTH).toBe(32);
     expect(isAdminTokenUsable("change-me")).toBe(false);
     expect(isAdminTokenUsable("")).toBe(false);
+    expect(isAdminTokenUsable("   ")).toBe(false);
     expect(isAdminTokenUsable(undefined)).toBe(false);
-    expect(isAdminTokenUsable("real-token")).toBe(true);
+    expect(isAdminTokenUsable("x".repeat(ADMIN_TOKEN_MIN_LENGTH - 1))).toBe(false);
+    expect(isAdminTokenUsable("x".repeat(ADMIN_TOKEN_MIN_LENGTH))).toBe(true);
+    expect(isAdminTokenUsable("  " + "x".repeat(ADMIN_TOKEN_MIN_LENGTH) + "  ")).toBe(true);
+  });
+
+  it("never issues admin tokens", () => {
+    const { repo, close } = testSetup();
+    try {
+      expect(() => issueToken(repo, { kind: "admin" })).toThrow(/admin tokens cannot be issued/);
+      expect(repo.listTokens()).toHaveLength(0);
+    } finally {
+      close();
+    }
   });
 
   it("parses only Bearer headers", () => {

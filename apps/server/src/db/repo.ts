@@ -13,6 +13,10 @@ export type Token = typeof tokens.$inferSelect;
 
 export interface Repo {
   upsertBot(bot: Bot): void;
+  /** Upserts the bot-owned profile fields and refreshes the heartbeat; one transaction. */
+  registerBot(bot: Pick<Bot, "id" | "name" | "role" | "avatar" | "pod">, now: string): void;
+  /** Refreshes the heartbeat and, when the status changed, sets it and resets `since`. */
+  touchHeartbeat(botId: string, status: Status["status"] | undefined, now: string): void;
   getBot(id: string): Bot | undefined;
   listBots(): Bot[];
   updateBot(id: string, patch: BotPatch): Bot | undefined;
@@ -36,6 +40,53 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
   return {
     upsertBot: (bot) => {
       db.insert(bots).values(bot).onConflictDoUpdate({ target: bots.id, set: bot }).run();
+    },
+    registerBot: (bot, now) => {
+      db.transaction((tx) => {
+        // Admin-owned fields (desk_index, hidden) and created_at survive a re-register.
+        tx.insert(bots)
+          .values({ ...bot, deskIndex: null, hidden: false, createdAt: now, updatedAt: now })
+          .onConflictDoUpdate({
+            target: bots.id,
+            set: {
+              name: bot.name,
+              role: bot.role,
+              avatar: bot.avatar,
+              pod: bot.pod,
+              updatedAt: now,
+            },
+          })
+          .run();
+        // Registering counts as a heartbeat but never resets the current status.
+        tx.insert(botStatus)
+          .values({ botId: bot.id, status: "idle", since: now, lastHeartbeatAt: now })
+          .onConflictDoUpdate({ target: botStatus.botId, set: { lastHeartbeatAt: now } })
+          .run();
+      });
+    },
+    touchHeartbeat: (botId, status, now) => {
+      db.transaction((tx) => {
+        const existing = tx
+          .select({ status: botStatus.status })
+          .from(botStatus)
+          .where(eq(botStatus.botId, botId))
+          .get();
+        if (!existing) {
+          tx.insert(botStatus)
+            .values({ botId, status: status ?? "idle", since: now, lastHeartbeatAt: now })
+            .run();
+        } else if (status !== undefined && status !== existing.status) {
+          tx.update(botStatus)
+            .set({ status, since: now, lastHeartbeatAt: now })
+            .where(eq(botStatus.botId, botId))
+            .run();
+        } else {
+          tx.update(botStatus)
+            .set({ lastHeartbeatAt: now })
+            .where(eq(botStatus.botId, botId))
+            .run();
+        }
+      });
     },
     getBot: (id) => db.select().from(bots).where(eq(bots.id, id)).get(),
     listBots: () => db.select().from(bots).all(),

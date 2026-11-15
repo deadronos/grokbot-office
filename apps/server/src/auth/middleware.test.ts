@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { requireToken, type AppEnv } from "./middleware.ts";
 import { issueToken, hashToken, TOKEN_PREFIX_LENGTH } from "./tokens.ts";
@@ -8,9 +8,10 @@ import { botRecord, testSetup } from "../test-utils.ts";
 const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanups.splice(0)) close();
+  vi.restoreAllMocks();
 });
 
-/** Mounts the middleware the way later bot routes will, without shipping those routes yet. */
+/** Mounts the middleware the way the bot routes do, with a trivial handler behind it. */
 function botRoute(repo: ReturnType<typeof testSetup>["repo"], kind: "bot" | "viewer" = "bot") {
   const app = new Hono<AppEnv>();
   app.use("/api/bots/:id/heartbeat", requireToken({ repo, kind, botIdParam: "id" }));
@@ -31,38 +32,52 @@ function setup() {
   return repo;
 }
 
+const UNAUTHORIZED = { error: "unauthorized" };
+const FORBIDDEN = { error: "forbidden" };
+
 describe("requireToken", () => {
-  it("rejects a missing or malformed authorization header", async () => {
+  it("rejects a missing or malformed authorization header generically", async () => {
     const app = botRoute(setup());
-    expect((await call(app, "data")).status).toBe(401);
+    const missing = await call(app, "data");
+    expect(missing.status).toBe(401);
+    await expect(missing.json()).resolves.toEqual(UNAUTHORIZED);
+
     const malformed = await app.request("/api/bots/data/heartbeat", {
       headers: { authorization: "Basic abc" },
     });
     expect(malformed.status).toBe(401);
+    await expect(malformed.json()).resolves.toEqual(UNAUTHORIZED);
   });
 
-  it("rejects an unknown token", async () => {
-    const app = botRoute(setup());
-    expect((await call(app, "data", "not-a-real-token")).status).toBe(401);
+  it("rejects an unknown token generically", async () => {
+    const res = await call(botRoute(setup()), "data", "not-a-real-token");
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual(UNAUTHORIZED);
   });
 
-  it("rejects a revoked token", async () => {
+  it("rejects a revoked token generically", async () => {
     const repo = setup();
     const issued = issueToken(repo, { kind: "bot", botId: "data" });
     repo.revokeToken(issued.id, "2026-01-02T00:00:00.000Z");
-    expect((await call(botRoute(repo), "data", issued.token)).status).toBe(401);
+    const res = await call(botRoute(repo), "data", issued.token);
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual(UNAUTHORIZED);
   });
 
-  it("rejects a token of the wrong kind", async () => {
+  it("rejects a token of the wrong kind with a generic 403", async () => {
     const repo = setup();
     const viewer = issueToken(repo, { kind: "viewer" });
-    expect((await call(botRoute(repo), "data", viewer.token)).status).toBe(403);
+    const res = await call(botRoute(repo), "data", viewer.token);
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual(FORBIDDEN);
   });
 
-  it("rejects a bot token used for another bot", async () => {
+  it("rejects a bot token used for another bot with a generic 403", async () => {
     const repo = setup();
     const data = issueToken(repo, { kind: "bot", botId: "data" });
-    expect((await call(botRoute(repo), "wesley", data.token)).status).toBe(403);
+    const wrongBot = await call(botRoute(repo), "wesley", data.token);
+    expect(wrongBot.status).toBe(403);
+    await expect(wrongBot.json()).resolves.toEqual(FORBIDDEN);
     expect((await call(botRoute(repo), "data", data.token)).status).toBe(200);
   });
 
@@ -75,6 +90,22 @@ describe("requireToken", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ botId: "data" });
     expect(repo.getToken(issued.id)?.lastUsedAt).not.toBeNull();
+  });
+
+  it("logs one reason but never the token, prefix or hash", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const repo = setup();
+    const issued = issueToken(repo, { kind: "bot", botId: "data" });
+    await call(botRoute(repo), "wesley", issued.token);
+    await call(botRoute(repo), "data", "unknown-token-value");
+
+    const serialized = JSON.stringify(warn.mock.calls);
+    expect(serialized).not.toContain(issued.token);
+    expect(serialized).not.toContain(issued.prefix);
+    expect(serialized).not.toContain(hashToken(issued.token));
+    expect(serialized).not.toContain("unknown-token-value");
+    expect(serialized).toContain("auth: token rejected");
+    expect(serialized).toContain("token bound to another bot");
   });
 });
 

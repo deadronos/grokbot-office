@@ -1,11 +1,19 @@
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./app.ts";
+import { resolveHeartbeatConfig } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
 
+// Invalid heartbeat settings stop the server here instead of at the first request.
+const heartbeat = resolveHeartbeatConfig(process.env);
+
 const db = openDatabase();
-const app = createApp({ repo: createSqliteRepo(db), adminToken: process.env.ADMIN_TOKEN });
+const app = createApp({
+  repo: createSqliteRepo(db),
+  adminToken: process.env.ADMIN_TOKEN,
+  heartbeat,
+});
 
 const port = Number(process.env.PORT ?? 8787);
 
