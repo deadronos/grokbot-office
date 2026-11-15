@@ -313,7 +313,7 @@ describe("StreamEvent", () => {
     expect(StreamEvent.safeParse({ seq: 0, ...event, receivedAt: AT }).success).toBe(false);
   });
 
-  it("sanitizes handoffId", () => {
+  it("keeps a clean handoffId verbatim on a stored stream event", () => {
     const parsed = StreamEvent.parse({
       seq: 1234,
       ...event,
