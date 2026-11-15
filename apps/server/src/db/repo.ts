@@ -7,13 +7,21 @@ import type { EventIn } from "@grokbot-office/shared";
 import { toUtc } from "../time.ts";
 import { botStatus, bots, events, handoffs, tokens } from "./schema.ts";
 
-type Bot = typeof bots.$inferSelect;
+export type Bot = typeof bots.$inferSelect;
 type BotPatch = Partial<Omit<Bot, "id" | "createdAt">>;
-type Status = typeof botStatus.$inferSelect;
-type Event = typeof events.$inferSelect;
+export type Status = typeof botStatus.$inferSelect;
+export type Event = typeof events.$inferSelect;
 type NewEvent = typeof events.$inferInsert;
-type Handoff = typeof handoffs.$inferSelect;
+export type Handoff = typeof handoffs.$inferSelect;
 export type Token = typeof tokens.$inferSelect;
+
+/** One consistent read of everything the viewer snapshot needs. */
+export interface SnapshotRows {
+  bots: Bot[];
+  statuses: Status[];
+  openHandoffs: Handoff[];
+  lastEventSeq: number;
+}
 
 export type ApplyEventsResult = { accepted: number; duplicates: number; lastSeq: number };
 
@@ -81,6 +89,12 @@ export interface Repo {
   setBotStatus(status: Status): void;
   insertEvent(event: NewEvent): { duplicate: boolean; seq: number };
   listEventsSince(seq: number): Event[];
+  /** Up to `limit + 1` events after `seq`, ascending; the extra row tells `hasMore`. */
+  listEventsPage(seq: number, limit: number): Event[];
+  /** Highest `events.seq`, or 0 when no event was recorded yet. */
+  getLastEventSeq(): number;
+  /** Bots, statuses, open handoffs and the event high-water mark in one transaction. */
+  getSnapshot(): SnapshotRows;
   /**
    * Applies a validated batch in one transaction: dedupe, event rows, `bot_status`
    * derivation and handoffs. The first duplicate is skipped with its side effects;
@@ -180,6 +194,36 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     },
     listEventsSince: (seq) =>
       db.select().from(events).where(gt(events.seq, seq)).orderBy(events.seq).all(),
+    listEventsPage: (seq, limit) =>
+      db
+        .select()
+        .from(events)
+        .where(gt(events.seq, seq))
+        .orderBy(events.seq)
+        .limit(limit + 1)
+        .all(),
+    getLastEventSeq: () =>
+      db.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()?.seq ??
+      0,
+    getSnapshot: () =>
+      db.transaction((tx) => ({
+        bots: tx
+          .select()
+          .from(bots)
+          .where(eq(bots.hidden, false))
+          .orderBy(bots.deskIndex, bots.id)
+          .all(),
+        statuses: tx.select().from(botStatus).all(),
+        openHandoffs: tx
+          .select()
+          .from(handoffs)
+          .where(eq(handoffs.state, "sent"))
+          .orderBy(handoffs.sentAt, handoffs.id)
+          .all(),
+        lastEventSeq:
+          tx.select({ seq: events.seq }).from(events).orderBy(desc(events.seq)).limit(1).get()
+            ?.seq ?? 0,
+      })),
     applyEvents: (botId, inputs, now) =>
       db.transaction((tx) => {
         // A bot always has a row after registration; a token can be older than that.
