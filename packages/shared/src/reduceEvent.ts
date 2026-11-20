@@ -1,5 +1,5 @@
 import type { BotSnapshot, Handoff, StreamEvent } from "./schemas.ts";
-import { applyLabelRule, shouldRestSender, type LabelEvent } from "./labelRules.ts";
+import { applyLabelRule, isSideHandoff, shouldRestSender, type LabelEvent } from "./labelRules.ts";
 
 /** The office store's reduced fields; the HUD feed is capped by the caller. */
 export type OfficeReduceState = {
@@ -76,10 +76,16 @@ export function reduceOfficeEvent(data: OfficeReduceState, event: StreamEvent): 
     case "handoff_sent": {
       const next = rule({ type: "handoff_sent", label: event.label, taskId: event.taskId });
       if (next) {
+        // Only the handoff the rule actually applies sets the link; a side send
+        // can leave the bot waiting on an earlier handoff.
+        const takesHandoff =
+          !isSideHandoff(bot?.taskId ?? null, event.taskId) &&
+          next.status === "waiting" &&
+          Boolean(event.handoffId);
         update({
           ...next,
           since: at,
-          ...(next.status === "waiting" && event.handoffId ? { handoffId: event.handoffId } : {}),
+          ...(takesHandoff ? { handoffId: event.handoffId } : {}),
         });
       }
       if (bot && event.handoffId && event.to) {
@@ -98,6 +104,8 @@ export function reduceOfficeEvent(data: OfficeReduceState, event: StreamEvent): 
     }
     case "handoff_accepted": {
       const handoff = openHandoffs.find((entry) => entry.id === event.handoffId);
+      // Already accepted or never seen: the server no-ops a second accept, and so do we.
+      if (!handoff) break;
       openHandoffs = openHandoffs.filter((entry) => entry.id !== event.handoffId);
       const next = rule({
         type: "handoff_accepted",
@@ -105,7 +113,8 @@ export function reduceOfficeEvent(data: OfficeReduceState, event: StreamEvent): 
         taskId: event.taskId,
         handoffLabel: handoff?.label ?? null,
       });
-      if (next) update({ ...next, since: at });
+      // Accepting starts work; the receiver is no longer waiting on a sent handoff.
+      if (next) update({ ...next, since: at, handoffId: undefined });
       if (handoff && handoff.fromBotId !== botId) {
         const sender = bots[handoff.fromBotId];
         if (sender && shouldRestSender(sender, event.handoffId)) {

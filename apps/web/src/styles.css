@@ -251,6 +251,14 @@ canvas {
   opacity: 0.85;
 }
 
+/* The feed puts the whole description in .hud-status; let that line ellipsis. */
+.hud-event .hud-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+
 .hud-label {
   min-width: 0;
   overflow: hidden;

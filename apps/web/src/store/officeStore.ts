@@ -17,6 +17,22 @@ export const EVENTS_PATH = "/api/events";
 
 /** The HUD feed shows the newest events only; older ones fall off the back. */
 export const FEED_LIMIT = 20;
+
+/** Merge by seq, keep order, cap the HUD feed. Replay and live frames share this. */
+function capFeed(events: StreamEvent[]): StreamEvent[] {
+  const merged = new Map(events.map((event) => [event.seq, event]));
+  return [...merged.values()].toSorted((a, b) => a.seq - b.seq).slice(-FEED_LIMIT);
+}
+
+function replayEvents(getState: () => OfficeStore, batches: StreamEvent[][]): void {
+  const merged = new Map<number, StreamEvent>();
+  for (const batch of batches) {
+    for (const event of batch) merged.set(event.seq, event);
+  }
+  for (const event of [...merged.values()].toSorted((a, b) => a.seq - b.seq)) {
+    getState().applyEvent(event);
+  }
+}
 /** A failed snapshot refetch is retried from 1s, doubling up to 30s. */
 const SNAPSHOT_RETRY_BASE_MS = 1_000;
 const SNAPSHOT_RETRY_MAX_MS = 30_000;
@@ -172,7 +188,10 @@ async function refreshOfficeSnapshot(getState: () => OfficeStore): Promise<void>
   refreshInFlight = false;
   const again = refreshAgain;
   refreshAgain = false;
-  for (const event of [...live, ...queued]) getState().applyEvent(event);
+  // Sorted by seq so a live known-bot event cannot bump lastEventSeq past a
+  // queued unknown-bot event that happened earlier. capFeed/applyEvent merge
+  // by seq so a live frame is not appended twice.
+  replayEvents(getState, [live, queued]);
   if (again && snapshotGeneration === startedAt) void refreshOfficeSnapshot(getState);
 }
 
@@ -206,22 +225,21 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
   error: null,
 
   applySnapshot: (snapshot) => {
-    set({
+    const visible = new Set(snapshot.bots.map((bot) => bot.id));
+    set((state) => ({
       bots: Object.fromEntries(snapshot.bots.map((bot) => [bot.id, bot])),
       openHandoffs: snapshot.openHandoffs,
       lastEventSeq: snapshot.lastEventSeq,
-    });
+      // Hidden bots must leave the feed, not just the list, for open viewers.
+      events: capFeed(state.events.filter((event) => visible.has(event.botId))),
+    }));
     invalidateScene();
   },
 
   seedEvents: (events) => {
     set((state) => {
       // Merge by seq so a reseed never duplicates or rewinds live frames.
-      const merged = new Map(state.events.map((event) => [event.seq, event]));
-      for (const event of events) merged.set(event.seq, event);
-      return {
-        events: [...merged.values()].toSorted((a, b) => a.seq - b.seq).slice(-FEED_LIMIT),
-      };
+      return { events: capFeed([...state.events, ...events]) };
     });
     invalidateScene();
   },
@@ -240,7 +258,7 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
     if (refreshInFlight) {
       if (known) {
         const next = reduceOfficeEvent(state, event);
-        next.events = next.events.slice(-FEED_LIMIT);
+        next.events = capFeed(next.events);
         set(next);
         invalidateScene();
         pendingLiveEvents.push(event);
@@ -250,6 +268,8 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
       if (pendingSnapshotEvents.length >= PENDING_EVENT_CAP) {
         pendingSnapshotEvents = [];
         pendingOverflowed = true;
+        // The in-flight snapshot may be stale; refetch once it lands.
+        refreshAgain = true;
         return;
       }
       pendingSnapshotEvents.push(event);
@@ -262,7 +282,7 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
       return;
     }
     const next = reduceOfficeEvent(state, event);
-    next.events = next.events.slice(-FEED_LIMIT);
+    next.events = capFeed(next.events);
     set(next);
     invalidateScene();
   },

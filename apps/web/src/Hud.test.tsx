@@ -137,6 +137,8 @@ describe("HudView", () => {
     // The shared ellipsis rule must not apply to status; only the label truncates.
     expect(css).not.toMatch(/\.hud-label,\s*\.hud-status[^{]*{[\s\S]*text-overflow:\s*ellipsis/);
     expect(statusRule.split("}")[0]).not.toContain("text-overflow");
+    const feedRule = css.slice(css.indexOf(".hud-event .hud-status"));
+    expect(feedRule.split("}")[0]).toContain("text-overflow");
   });
 
   it("does not show a hidden bot in a fresh session", () => {

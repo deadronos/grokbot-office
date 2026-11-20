@@ -136,6 +136,7 @@ After changing `apps/server/src/db/schema.ts`, run
 SQLite cannot add `CHECK` or foreign-key constraints in place, so such a migration
 rebuilds the table; the migrator runs the whole migration set in one transaction with
 foreign-key enforcement off, and every query after startup runs with it on.
+If a local database already ran the unmerged 0008 from an earlier PR 45 head, delete that database file and let the server create a fresh one.
 
 ## Tokens
 
@@ -404,9 +405,9 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
         "z": 3,
         "facing": 3.14159
       },
-      "status": "working",
+      "status": "waiting",
       "label": "issue-7",
-      "taskId": "issue-7",
+      "handoffId": "h1",
       "since": "2026-01-01T00:00:00.000Z",
       "lastHeartbeatAt": "2026-01-01T00:00:00.000Z",
       "lastEventSeq": 42
@@ -425,6 +426,10 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
   "lastEventSeq": 42
 }
 ```
+
+A bot that is `waiting` may also carry `handoffId`, the open handoff it is waiting
+on. The field is omitted when there is no such link, and it is scrubbed when that
+handoff is from or to a hidden bot.
 
 The shared fixed layout (`DESKS` / `getDesk` in `packages/shared`) is the only source
 of desks: only its bots carry `desk` (the others are HUD-list only), and there is no
