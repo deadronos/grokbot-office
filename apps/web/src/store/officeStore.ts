@@ -230,8 +230,13 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
       bots: Object.fromEntries(snapshot.bots.map((bot) => [bot.id, bot])),
       openHandoffs: snapshot.openHandoffs,
       lastEventSeq: snapshot.lastEventSeq,
-      // Hidden bots must leave the feed, not just the list, for open viewers.
-      events: capFeed(state.events.filter((event) => visible.has(event.botId))),
+      // Hidden bots must leave the feed, not just the list, for open viewers:
+      // a line naming one as sender or as handoff target goes too.
+      events: capFeed(
+        state.events.filter(
+          (event) => visible.has(event.botId) && (event.to === undefined || visible.has(event.to)),
+        ),
+      ),
     }));
     invalidateScene();
   },

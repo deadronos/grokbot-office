@@ -631,6 +631,32 @@ describe("applyEvent", () => {
     expect(JSON.stringify(useOfficeStore.getState().events)).not.toContain("issue-13");
   });
 
+  it("prunes feed lines whose handoff target left the snapshot", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+    useOfficeStore.getState().applyEvent(
+      streamEvent(8, {
+        botId: "wesley",
+        type: "handoff_sent",
+        to: "data",
+        handoffId: "handoff-out",
+      }),
+    );
+    expect(useOfficeStore.getState().events.some((event) => event.to === "data")).toBe(true);
+
+    const withoutData: StateSnapshot = {
+      ...snapshot,
+      bots: snapshot.bots.filter((bot) => bot.id !== "data"),
+      openHandoffs: [],
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(withoutData));
+    source.emit("refresh", "{}");
+
+    await vi.waitFor(() => expect(useOfficeStore.getState().bots.data).toBeUndefined());
+    expect(useOfficeStore.getState().events.some((event) => event.to === "data")).toBe(false);
+  });
+
   it("expires the session when a snapshot refetch returns 401", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
     await useOfficeStore.getState().checkSession();

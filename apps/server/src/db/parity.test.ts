@@ -82,6 +82,13 @@ function serverFields(repo: Repo, botId: string) {
   };
 }
 
+/** The fields a viewer sees: the snapshot scrubs labels and links of hidden handoffs. */
+function snapshotFields(repo: Repo, botId: string) {
+  const status = repo.getSnapshot().statuses.find((row) => row.botId === botId);
+  if (!status) throw new Error(`missing snapshot status for ${botId}`);
+  return fields(status);
+}
+
 type Sequence = { name: string; batches: Array<{ botId: string; events: EventIn[] }> };
 
 const sequences: Sequence[] = [
@@ -329,6 +336,53 @@ describe("server applyEvents vs client reduceOfficeEvent parity", () => {
     }
   });
 
+  it("applies an accept whose hidden sender scrubbed the handoffId", () => {
+    const repo = setupRepo();
+    repo.applyEvents(
+      "data",
+      [ev("data", 1, "task_started", { taskId: "t1", label: "issue-13" })],
+      NOW,
+    );
+    repo.applyEvents(
+      "data",
+      [
+        ev("data", 2, "handoff_sent", {
+          to: "wesley",
+          handoffId: "h-hidden",
+          taskId: "t1",
+          label: "packet label",
+        }),
+      ],
+      NOW,
+    );
+    // Hidden after the send: the viewer never sees the sender or its handoff id.
+    repo.updateBot("data", { hidden: true });
+
+    let client = clientState(repo);
+    expect(client.bots.data).toBeUndefined();
+
+    repo.applyEvents(
+      "wesley",
+      [
+        ev("wesley", 3, "handoff_accepted", {
+          handoffId: "h-hidden",
+          taskId: "t1",
+          label: "own label",
+        }),
+      ],
+      NOW,
+    );
+
+    const page = repo.getEventsPage(0, 100).rows.map(toStreamEvent);
+    const accepted = page.find((event) => event.type === "handoff_accepted");
+    expect(accepted?.handoffId).toBeUndefined();
+    expect(page.some((event) => event.handoffId === "h-hidden")).toBe(false);
+    for (const event of page) client = reduceOfficeEvent(client, event);
+
+    expect(fields(client.bots.wesley!)).toEqual(snapshotFields(repo, "wesley"));
+    expect(client.bots.wesley?.status).toBe("working");
+  });
+
   it("holds under a deterministic seeded fuzz of mixed events", () => {
     // 150 short sequences is enough to catch the known handoffId / re-accept gaps
     // without a long CI run. A larger seed was used to find them.
@@ -342,6 +396,7 @@ describe("server applyEvents vs client reduceOfficeEvent parity", () => {
       let client = clientState(repo);
       let n = 0;
       const open: Array<{ id: string; to: string }> = [];
+      const accepted: Array<{ id: string; to: string }> = [];
 
       for (let step = 0; step < 12; step++) {
         const botId = bots[Math.floor(rng() * bots.length)]!;
@@ -352,12 +407,21 @@ describe("server applyEvents vs client reduceOfficeEvent parity", () => {
           taskId: `t-${sequence}-${step}`,
           label: `label-${step}`,
         });
+        const done = accepted.filter((handoff) => handoff.to === botId);
         let event: EventIn;
-        if (incoming.length > 0 && roll < 0.25) {
+        if (done.length > 0 && roll < 0.15) {
+          // Re-accepting a handoff the server already accepted must no-op on both sides.
           event = ev(botId, n, "handoff_accepted", {
-            handoffId: incoming[Math.floor(rng() * incoming.length)]!.id,
+            handoffId: done[Math.floor(rng() * done.length)]!.id,
+            taskId: `reaccept-${step}`,
+          });
+        } else if (incoming.length > 0 && roll < 0.25) {
+          const handoff = incoming[Math.floor(rng() * incoming.length)]!;
+          event = ev(botId, n, "handoff_accepted", {
+            handoffId: handoff.id,
             taskId: `accept-${step}`,
           });
+          accepted.push(handoff);
         } else if (roll < 0.45) {
           event = ev(botId, n, "status_changed", {
             status: statuses[Math.floor(rng() * statuses.length)]!,

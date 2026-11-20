@@ -103,10 +103,13 @@ export function reduceOfficeEvent(data: OfficeReduceState, event: StreamEvent): 
       break;
     }
     case "handoff_accepted": {
-      const handoff = openHandoffs.find((entry) => entry.id === event.handoffId);
+      const handoff = event.handoffId
+        ? openHandoffs.find((entry) => entry.id === event.handoffId)
+        : undefined;
       // Already accepted or never seen: the server no-ops a second accept, and so do we.
-      if (!handoff) break;
-      openHandoffs = openHandoffs.filter((entry) => entry.id !== event.handoffId);
+      // No handoffId means a hidden sender scrubbed it, so the accept still applies.
+      if (event.handoffId !== undefined && !handoff) break;
+      if (handoff) openHandoffs = openHandoffs.filter((entry) => entry.id !== handoff.id);
       const next = rule({
         type: "handoff_accepted",
         label: event.label,
