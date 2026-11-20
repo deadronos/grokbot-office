@@ -383,6 +383,8 @@ describe("server applyEvents vs client reduceOfficeEvent parity", () => {
     expect(client.bots.wesley?.status).toBe("working");
   });
 
+  // CI's sqlite is ~6x slower than a dev Mac (833ms locally, past the default 5s
+  // on CI), so keep a 20s budget for the same 150-sequence coverage.
   it("holds under a deterministic seeded fuzz of mixed events", () => {
     // 150 short sequences is enough to catch the known handoffId / re-accept gaps
     // without a long CI run. A larger seed was used to find them.
@@ -460,7 +462,7 @@ describe("server applyEvents vs client reduceOfficeEvent parity", () => {
         }
       }
     }
-  });
+  }, 20_000);
 });
 
 /** Deterministic 32-bit PRNG so a failing case is reproducible. */
