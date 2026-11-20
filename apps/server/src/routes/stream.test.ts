@@ -143,8 +143,8 @@ describe("GET /api/stream frames", () => {
 });
 
 describe("GET /api/stream hidden bot", () => {
-  it("streams only the bot_hidden frame, with no other field from the hidden bot", async () => {
-    const { app, repo, hub, viewerToken } = setup();
+  it("does not stream a hidden bot's events or a bot_hidden frame", async () => {
+    const { app, repo, viewerToken, dataToken } = setup();
     repo.upsertBot({ ...botRecord("ghost"), hidden: true });
     repo.applyEvents(
       "ghost",
@@ -167,22 +167,20 @@ describe("GET /api/stream hidden bot", () => {
       ] as never,
       NOW,
     );
-    const sse = new Sse(await open(app, auth(viewerToken)));
+    const sse = new Sse(await open(app, auth(viewerToken), "/api/stream?since=0"));
+    expect((await sse.nextRaw()).comment).toBe("open");
 
-    repo.insertEvent({
-      eventId: ulid(3),
-      botId: "ghost",
-      type: "bot_hidden",
-      receivedAt: NOW,
-    });
-    hub.notify();
+    const visible = await post(app, dataToken, [
+      { botId: "data", eventId: ulid(3), type: "status_changed", status: "idle" },
+    ]);
+    expect(visible.status).toBe(200);
 
     const frame = await sse.next();
-    expect(JSON.parse(frame.data)).toMatchObject({
-      seq: 3,
-      botId: "ghost",
-      type: "bot_hidden",
-    });
+    expect(frame.event).toBe("event");
+    const payload = JSON.parse(frame.data) as { botId: string; type: string };
+    expect(payload).toMatchObject({ botId: "data", type: "status_changed" });
+    expect(frame.data).not.toContain("bot_hidden");
+    expect(frame.data).not.toContain("ghost");
     for (const secret of ["classified", "h-secret"]) expect(frame.data).not.toContain(secret);
     await sse.cancel();
   });

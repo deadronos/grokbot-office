@@ -204,7 +204,7 @@ describe("admin token endpoints", () => {
     expect((await patch("Bad Slug", { name: "x" })).status).toBe(400);
   });
 
-  it("records visibility flips as bot_hidden and bot_registered events", async () => {
+  it("flips visibility without storing a feed event", async () => {
     const { app, repo } = setup();
     const patch = (body: unknown) =>
       app.request("/api/admin/bots/data", {
@@ -215,14 +215,16 @@ describe("admin token endpoints", () => {
     const types = () => repo.listEventsSince(0).map((event) => event.type);
 
     expect((await patch({ hidden: true })).status).toBe(200);
-    expect(types()).toEqual(["bot_hidden"]);
+    expect(repo.getBot("data")?.hidden).toBe(true);
+    expect(types()).toEqual([]);
 
-    // Patches that do not flip visibility leave the feed alone.
+    // Patches that do not flip visibility still store nothing.
     expect((await patch({ hidden: true, name: "Data II" })).status).toBe(200);
     expect((await patch({ pod: "ops" })).status).toBe(200);
-    expect(types()).toEqual(["bot_hidden"]);
+    expect(types()).toEqual([]);
 
     expect((await patch({ hidden: false })).status).toBe(200);
-    expect(types()).toEqual(["bot_hidden", "bot_registered"]);
+    expect(repo.getBot("data")?.hidden).toBe(false);
+    expect(types()).toEqual([]);
   });
 });

@@ -34,6 +34,9 @@ export function toBotSnapshot(bot: Bot, status: Status | undefined): BotSnapshot
     status: status?.status ?? "offline",
     ...(status?.label === null || status?.label === undefined ? {} : { label: status.label }),
     ...(status?.taskId === null || status?.taskId === undefined ? {} : { taskId: status.taskId }),
+    ...(status?.handoffId === null || status?.handoffId === undefined
+      ? {}
+      : { handoffId: status.handoffId }),
     since: status?.since ?? bot.createdAt,
     lastHeartbeatAt: status?.lastHeartbeatAt ?? bot.createdAt,
     lastEventSeq: status?.lastEventSeq ?? 0,

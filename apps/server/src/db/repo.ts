@@ -19,7 +19,7 @@ import {
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 import type { EventIn, LabelEvent } from "@grokbot-office/shared";
-import { applyLabelRule } from "@grokbot-office/shared";
+import { applyLabelRule, isSideHandoff, shouldRestSender } from "@grokbot-office/shared";
 
 import { toUtc } from "../time.ts";
 import { botStatus, bots, events, handoffs, sessions, tokens } from "./schema.ts";
@@ -76,16 +76,15 @@ const RELEASED_LINKS = {
  * it can never enter the event-derived `working`/`waiting` states (it only refreshes
  * `last_heartbeat_at`) and cannot leave them either, except with `offline`. Moving to
  * `idle`/`offline` releases the task and handoff links. An offline bot comes back on
- * any heartbeat: empty, `working` or `waiting` → `idle`, any other status as given.
+ * a keep-alive or a rest status (`idle`, `reviewing`); `working`/`waiting` are rejected
+ * at the route and are a no-op here.
  */
 export function heartbeatPatch(
   current: Pick<Status, "status"> | undefined,
   status: Status["status"] | undefined,
 ): Partial<Status> | undefined {
+  if (status === "working" || status === "waiting") return undefined;
   const offline = current?.status === "offline";
-  if (status === "working" || status === "waiting") {
-    return offline ? { status: "idle", ...RELEASED_LINKS } : undefined;
-  }
   if (offline) {
     if (status === "offline") return undefined;
     const next = status ?? "idle";
@@ -131,8 +130,8 @@ export interface Repo {
    * Viewer page, one read transaction: up to `limit + 1` visible events after `seq`,
    * ascending (the extra row tells `hasMore`), plus the global `events.seq`
    * high-water mark (0 when empty). Events of hidden bots, as sender or as handoff
-   * target, are skipped; only their `bot_hidden` frame goes out so viewers can drop
-   * the bot without leaking anything else about it.
+   * target, are skipped. Visibility changes are not stored as events; open viewers
+   * are told to refetch the snapshot instead.
    */
   getEventsPage(seq: number, limit: number): { rows: Event[]; lastSeq: number };
   /** Bots, statuses, open handoffs and the event high-water mark in one transaction. */
@@ -248,6 +247,36 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       return { ...s, label: ownLabels.get(key) ?? null };
     });
   };
+  /**
+   * Read-time handoff-link scrub: a visible bot waiting on a handoff from or to a
+   * hidden bot must not expose that handoff id on the snapshot. Un-hiding restores it.
+   */
+  const scrubHiddenHandoffLinks = (reader: Reader, statuses: Status[]): Status[] => {
+    const linked = [
+      ...new Set(statuses.flatMap((s) => (s.handoffId === null ? [] : [s.handoffId]))),
+    ];
+    if (linked.length === 0) return statuses;
+    const hiddenIds = hiddenBotIds(reader);
+    const hiddenLinks = new Set(
+      reader
+        .select({ id: handoffs.id })
+        .from(handoffs)
+        .where(
+          and(
+            inArray(handoffs.id, linked),
+            or(inArray(handoffs.fromBotId, hiddenIds), inArray(handoffs.toBotId, hiddenIds)),
+          ),
+        )
+        .all()
+        .map((row) => row.id),
+    );
+    if (hiddenLinks.size === 0) return statuses;
+    return statuses.map((s) =>
+      s.handoffId !== null && hiddenLinks.has(s.handoffId)
+        ? { ...s, handoffId: null, handoffTo: null }
+        : s,
+    );
+  };
   /** Subquery of hidden bot ids, read live: un-hiding a bot shows its history again. */
   const hiddenBotIds = (reader: Reader) =>
     reader.select({ id: bots.id }).from(bots).where(eq(bots.hidden, true));
@@ -309,13 +338,13 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       }),
     touchHeartbeat: (botId, status, now) =>
       db.transaction((tx) => {
+        // The route already 422s these; leave the row (or its absence) untouched.
+        if (status === "working" || status === "waiting") return false;
         const existing = tx.select().from(botStatus).where(eq(botStatus.botId, botId)).get();
         const patch = heartbeatPatch(existing, status);
         if (!existing) {
-          // The first heartbeat can be a keep-alive too: working/waiting start idle.
-          const start = status === "working" || status === "waiting" ? "idle" : (status ?? "idle");
           tx.insert(botStatus)
-            .values({ botId, status: start, since: now, lastHeartbeatAt: now })
+            .values({ botId, status: status ?? "idle", since: now, lastHeartbeatAt: now })
             .run();
           return false;
         }
@@ -386,7 +415,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .where(
             and(
               gt(events.seq, seq),
-              or(notInArray(events.botId, hiddenIds), eq(events.type, "bot_hidden")),
+              notInArray(events.botId, hiddenIds),
               or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
             ),
           )
@@ -428,7 +457,10 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           // Layout order is applied by the route; the DB only gives a stable base order.
           .orderBy(asc(bots.id))
           .all(),
-        statuses: scrubHiddenLabels(tx, tx.select().from(botStatus).all()),
+        statuses: scrubHiddenHandoffLinks(
+          tx,
+          scrubHiddenLabels(tx, tx.select().from(botStatus).all()),
+        ),
         // A handoff from or to a hidden bot stays out, like the bot itself.
         openHandoffs: tx
           .select()
@@ -512,13 +544,9 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
               change({ type: "task_started", taskId: input.taskId, label: input.label });
               break;
             case "task_finished": {
-              // The result lives on the event only. Finishing a task the bot is not on
-              // (both ids known and different) is recorded but leaves the current work alone.
-              const otherTask =
-                input.taskId !== undefined &&
-                status.taskId !== null &&
-                input.taskId !== status.taskId;
-              if (!otherTask) change({ type: "task_finished" });
+              // The result lives on the event only. The shared rule records a finish
+              // for another task but leaves the current work alone.
+              change({ type: "task_finished", taskId: input.taskId });
               break;
             }
             case "handoff_sent": {
@@ -547,10 +575,9 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                 })
                 .run();
               // Another open task keeps the sender working; handing off its own task waits.
-              const otherTask = status.taskId !== null && status.taskId !== (input.taskId ?? null);
-              if (!otherTask) {
+              if (!isSideHandoff(status.taskId, input.taskId)) {
                 change(
-                  { type: "handoff_sent", label: input.label },
+                  { type: "handoff_sent", label: input.label, taskId: input.taskId },
                   { handoffTo: input.to, handoffId: input.handoffId },
                 );
               }
@@ -593,7 +620,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   .get();
                 // Only the handoff the sender is waiting on releases it; accepting a
                 // side handoff to the same receiver leaves it waiting.
-                if (sender && sender.status === "waiting" && sender.handoffId === handoff.id) {
+                if (sender && shouldRestSender(sender, handoff.id)) {
                   tx.update(botStatus)
                     .set({ status: "idle", since: now, ...RELEASED_LINKS })
                     .where(eq(botStatus.botId, sender.botId))

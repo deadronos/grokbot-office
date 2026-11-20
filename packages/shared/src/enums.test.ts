@@ -23,7 +23,6 @@ describe("enums", () => {
       "handoff_accepted",
       "offline",
       "bot_registered",
-      "bot_hidden",
     ]);
   });
 
@@ -34,6 +33,6 @@ describe("enums", () => {
 
   it("lists handoff states and keeps the server-only event types apart", () => {
     expect(HANDOFF_STATES).toEqual(["sent", "accepted", "cancelled"]);
-    expect(SERVER_EVENT_TYPES).toEqual(["offline", "bot_registered", "bot_hidden"]);
+    expect(SERVER_EVENT_TYPES).toEqual(["offline", "bot_registered"]);
   });
 });

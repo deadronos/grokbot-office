@@ -32,8 +32,6 @@ export function describeEvent(event: StreamEvent): string {
       return "went offline";
     case "bot_registered":
       return "registered";
-    case "bot_hidden":
-      return "hidden";
   }
 }
 

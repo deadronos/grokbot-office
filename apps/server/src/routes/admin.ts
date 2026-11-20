@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { z } from "zod";
 import { Hono } from "hono";
 
@@ -77,15 +75,10 @@ export function adminRoutes(repo: Repo, hub: StreamHub) {
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     const now = nowUtc();
     const updated = repo.updateBot(id, { ...parsed.data, updatedAt: now });
-    // Toggling visibility is a feed event, so open viewers drop or re-add the bot now.
+    // Visibility is not a stored event: after the update commits, an id-less
+    // refresh frame tells open viewers to refetch the snapshot.
     if (parsed.data.hidden !== undefined && parsed.data.hidden !== before.hidden) {
-      repo.insertEvent({
-        eventId: randomUUID(),
-        botId: id,
-        type: parsed.data.hidden ? "bot_hidden" : "bot_registered",
-        receivedAt: now,
-      });
-      hub.notify();
+      hub.refresh();
     }
     return c.json(updated);
   });

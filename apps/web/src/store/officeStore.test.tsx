@@ -8,6 +8,7 @@ import {
   CLOSED_AFTER_MS,
   NOT_VIEWER_MESSAGE,
   UNREACHABLE_MESSAGE,
+  resetOfficeStoreInternals,
   selectBot,
   useOfficeStore,
 } from "./officeStore";
@@ -128,6 +129,7 @@ beforeEach(() => {
   stops.length = 0;
   fetchMock.mockReset();
   invalidateScene.mockClear();
+  resetOfficeStoreInternals();
   resetStore();
 });
 
@@ -321,7 +323,12 @@ describe("stream", () => {
     source.emit(
       "event",
       JSON.stringify(
-        streamEvent(8, { type: "handoff_sent", to: "wesley", handoffId: "handoff-1" }),
+        streamEvent(8, {
+          type: "handoff_sent",
+          to: "wesley",
+          handoffId: "handoff-1",
+          taskId: "issue-11",
+        }),
       ),
     );
     expect(useOfficeStore.getState().openHandoffs).toHaveLength(1);
@@ -598,24 +605,84 @@ describe("applyEvent", () => {
     });
   });
 
-  it("drops a hidden bot, its handoffs and shows it in the feed", async () => {
+  it("refetches the snapshot on a refresh frame and drops a bot that is no longer in it", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
     await useOfficeStore.getState().checkSession();
     const source = startStream();
+    fetchMock.mockClear();
 
-    source.emit("event", JSON.stringify(streamEvent(8, { type: "offline" })));
-    useOfficeStore.getState().applyEvent({
-      seq: 9,
-      botId: "data",
-      type: "bot_hidden",
-      receivedAt: AT,
-    });
+    const withoutData: StateSnapshot = {
+      ...snapshot,
+      bots: snapshot.bots.filter((bot) => bot.id !== "data"),
+      openHandoffs: [],
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(withoutData));
+    source.emit("refresh", "{}");
 
-    const state = useOfficeStore.getState();
-    expect(state.bots.data).toBeUndefined();
-    expect(state.openHandoffs).toEqual([]);
-    expect(state.events.at(-1)).toMatchObject({ seq: 9, type: "bot_hidden" });
-    expect(state.lastEventSeq).toBe(9);
+    await vi.waitFor(() => expect(useOfficeStore.getState().bots.data).toBeUndefined());
+    expect(useOfficeStore.getState().bots.wesley).toBeDefined();
+    expect(fetchMock).toHaveBeenCalledWith("/api/state", { credentials: "same-origin" });
+    expect(JSON.stringify(useOfficeStore.getState().events)).not.toContain("bot_hidden");
+  });
+
+  it("expires the session when a snapshot refetch returns 401", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    const source = startStream();
+    source.emit("open");
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(emptyResponse(401));
+
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "lumi" }));
+
+    await vi.waitFor(() => expect(useOfficeStore.getState().phase).toBe("login"));
+    expect(useOfficeStore.getState().bots).toEqual({});
+    expect(useOfficeStore.getState().events).toEqual([]);
+  });
+
+  it("keeps applying events for known bots while a refetch retries", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(emptyResponse(500));
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "lumi" }));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    useOfficeStore
+      .getState()
+      .applyEvent(streamEvent(9, { type: "status_changed", status: "reviewing" }));
+    expect(useOfficeStore.getState().bots.data?.status).toBe("reviewing");
+    expect(useOfficeStore.getState().bots.lumi).toBeUndefined();
+  });
+
+  it("drops an overflowing unknown-bot queue and relies on the snapshot lastEventSeq", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(snapshot));
+    await useOfficeStore.getState().checkSession();
+    vi.useFakeTimers();
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(emptyResponse(500));
+    useOfficeStore.getState().applyEvent(streamEvent(8, { type: "bot_registered", botId: "lumi" }));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    for (let seq = 9; seq <= 8 + 501; seq++) {
+      useOfficeStore
+        .getState()
+        .applyEvent(streamEvent(seq, { type: "bot_registered", botId: `bot-${seq}` }));
+    }
+
+    // The snapshot is the authority after overflow: later queued seqs must not
+    // replay (that would bump lastEventSeq and start another refetch).
+    const arrived: StateSnapshot = { ...snapshot, lastEventSeq: 8 };
+    fetchMock.mockResolvedValueOnce(jsonResponse(arrived));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(useOfficeStore.getState().lastEventSeq).toBe(8);
+    expect(useOfficeStore.getState().bots.lumi).toBeUndefined();
+    expect(Object.keys(useOfficeStore.getState().bots).toSorted()).toEqual(["data", "wesley"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("flashes a handoff line and clears it on request", async () => {

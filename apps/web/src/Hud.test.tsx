@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -63,7 +66,7 @@ describe("describeEvent", () => {
       "handoff · to wesley · issue-13",
     );
     expect(describeEvent(event(1, { type: "offline" }))).toBe("went offline");
-    expect(describeEvent(event(1, { type: "bot_hidden" }))).toBe("hidden");
+    expect(describeEvent(event(1, { type: "bot_registered" }))).toBe("registered");
   });
 });
 
@@ -112,5 +115,36 @@ describe("HudView", () => {
     const html = render({}, []);
     expect(html).toContain("No bots online.");
     expect(html).toContain("No events yet.");
+  });
+
+  it("truncates a long label without cutting the status word", () => {
+    const html = render({
+      data: bot({
+        status: "reviewing",
+        label: "this-label-is-deliberately-very-long-and-must-not-eat-the-status",
+      }),
+    });
+    expect(html).toContain(">reviewing<");
+    expect(html).toContain("hud-label");
+    expect(html).toContain("hud-status");
+    // Status and label are separate nodes so a long label cannot ellipsis the status.
+    expect(html).toMatch(/hud-status[^>]*>reviewing</);
+    expect(html).toMatch(
+      /hud-label[^>]*>this-label-is-deliberately-very-long-and-must-not-eat-the-status</,
+    );
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "styles.css"), "utf8");
+    const statusRule = css.slice(css.indexOf(".hud-status"));
+    // The shared ellipsis rule must not apply to status; only the label truncates.
+    expect(css).not.toMatch(/\.hud-label,\s*\.hud-status[^{]*{[\s\S]*text-overflow:\s*ellipsis/);
+    expect(statusRule.split("}")[0]).not.toContain("text-overflow");
+  });
+
+  it("does not show a hidden bot in a fresh session", () => {
+    const html = render({ data: bot({}) }, [
+      event(1, { type: "task_started", taskId: "issue-13" }),
+    ]);
+    expect(html).not.toContain("quark");
+    expect(html).not.toContain(">hidden<");
+    expect(html).not.toContain("bot_hidden");
   });
 });

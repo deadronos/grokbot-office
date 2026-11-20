@@ -178,27 +178,28 @@ curl -sS -X POST http://127.0.0.1:8787/api/bots/register \
 # 200 {"id":"data","heartbeatIntervalSec":60,"timeoutSec":300}
 ```
 
-Heartbeat (keep-alive; the optional `status` is one of `idle`, `working`,
-`waiting`, `reviewing`, `offline`; an empty body is fine). A heartbeat is only a
-keep-alive: work state comes from events, so it never moves a live bot into
-`working` or `waiting` and never ends those states. It can still report a rest
+Heartbeat (keep-alive; the optional `status` is one of `idle`, `reviewing`,
+`offline`; an empty body is fine). A heartbeat is only a keep-alive: work state
+comes from events, so it cannot set `working` or `waiting`. Those two values are
+rejected with `422 {"error":"working/waiting are set by task and handoff events, not heartbeats"}`
+and change nothing (not even `last_heartbeat_at`). It can still report a rest
 state (`idle`, `reviewing`) or `offline`.
 The server sweeps stale heartbeats every 15 seconds. A bot whose last heartbeat is
 older than `timeoutSec` is marked `offline`, its task, label and handoff links are
 cleared, its `since` moves, and the server appends an `offline` event that viewers
 receive over SSE. A bot that is already offline is left alone, and so is a bot with
-no status row (not yet online). A later heartbeat or re-register brings an offline
-bot back to `idle`: an explicit `working`/`waiting` from an offline bot is ignored
-and becomes `idle`, because those states must be derived from events. `since` moves
-to now and viewers receive a `status_changed` event. Already-online bots get no
-extra event. Hidden bots are updated in the database the same way; the existing
-hidden-bot filter keeps their events off the viewer snapshot and stream.
+no status row (not yet online). A later heartbeat (`idle`, `reviewing`, `offline`, or
+an empty body) or re-register brings an offline bot back to `idle` (or the rest
+status it sent). `since` moves to now and viewers receive a `status_changed` event.
+Already-online bots get no extra event. Hidden bots are updated in the database the
+same way; the existing hidden-bot filter keeps their events off the viewer snapshot
+and stream.
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots/data/heartbeat \
   -H "Authorization: Bearer $BOT_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"status":"working"}'
+  -d '{"status":"reviewing"}'
 # 204
 ```
 
@@ -240,8 +241,8 @@ The server derives `bot_status` from the events, in order:
 Whenever a bot comes to rest (`idle` or `offline`, from an event or a heartbeat) its
 `task_id`, `label`, `handoff_to` and `handoff_id` are cleared; a `status_changed` label
 still applies. A heartbeat `status` cannot end a derived `working`/`waiting` state
-unless it is `offline`; when an offline bot comes back, `working`/`waiting` from the
-heartbeat is ignored in favour of `idle`. `since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
+unless it is `offline`; a `working` or `waiting` heartbeat is rejected with `422` and
+never brings an offline bot back. `since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
 (`sent` → `accepted`). An event the server cannot apply (a handoff to itself or to an
 unknown bot, a reused `handoffId`, a handoff the bot may not accept) fails the whole
 batch with `422 {"error":"invalid event","index":1}`.
@@ -437,11 +438,12 @@ still register, heartbeat and post events, but viewers never see the bot, its ev
 events that hand off to it, or open handoffs from or to it. The flag is read at request
 time, so un-hiding a bot shows its history again. `lastSeq` / `lastEventSeq` stay the
 global high-water mark, hidden events included, so `seq` has gaps for viewers.
-Toggling `hidden` in `PATCH /api/admin/bots/:id` records a `bot_hidden` (hidden) or
-`bot_registered` (un-hidden) event and notifies the stream. The `bot_hidden` frame is
-the one exception to the filter: viewers receive it so the store can drop the bot
-from the scene, HUD and open handoffs; it carries no name, label or task. The replay
-and live stream never send a hidden bot's other events.
+Toggling `hidden` in `PATCH /api/admin/bots/:id` is not stored as an event. After the
+bot row is updated, the stream sends an id-less `refresh` frame (`event: refresh`,
+`data: {}`, no `id:` line and no bot id). Open viewers refetch `GET /api/state` and
+replace their bot list and open handoffs from that snapshot. The replay and live
+stream never send a hidden bot's events, and a fresh session never sees that the bot
+was hidden.
 
 A visible bot accepting a handoff from a hidden sender leaks nothing from that side, and
 both scrubs happen at read time, so it does not matter whether the sender was hidden

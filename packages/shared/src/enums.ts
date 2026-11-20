@@ -13,7 +13,7 @@ export const CLIENT_EVENT_TYPES = [
   "handoff_accepted",
 ] as const;
 
-export const SERVER_EVENT_TYPES = ["offline", "bot_registered", "bot_hidden"] as const;
+export const SERVER_EVENT_TYPES = ["offline", "bot_registered"] as const;
 
 export const EVENT_TYPES = [...CLIENT_EVENT_TYPES, ...SERVER_EVENT_TYPES] as const;
 export const eventTypeSchema = z.enum(EVENT_TYPES);

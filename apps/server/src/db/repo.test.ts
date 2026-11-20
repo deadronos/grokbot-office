@@ -187,29 +187,40 @@ describe("SQLite repository", () => {
     const later = "2026-01-02T00:00:00.000Z";
     const laterStill = "2026-01-03T00:00:00.000Z";
 
-    // A derived status on the first heartbeat is a keep-alive: the row starts idle.
+    // working/waiting are rejected at the route; the repo also leaves state untouched.
     repo.touchHeartbeat("a", "working", now);
+    expect(repo.getBotStatus("a")).toBeUndefined();
+
+    repo.touchHeartbeat("a", undefined, now);
     expect(repo.getBotStatus("a")).toMatchObject({
       status: "idle",
       since: now,
       lastHeartbeatAt: now,
     });
 
-    repo.touchHeartbeat("a", "working", later);
+    repo.touchHeartbeat("a", "waiting", later);
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "idle",
+      since: now,
+      lastHeartbeatAt: now,
+    });
+
+    repo.touchHeartbeat("a", undefined, later);
     expect(repo.getBotStatus("a")).toMatchObject({
       status: "idle",
       since: now,
       lastHeartbeatAt: later,
     });
 
-    repo.touchHeartbeat("a", undefined, laterStill);
-    expect(repo.getBotStatus("a")).toMatchObject({ status: "idle", since: now });
-
     // A heartbeat may enter reviewing, but never leave it for working/waiting.
     repo.touchHeartbeat("a", "reviewing", laterStill);
     expect(repo.getBotStatus("a")).toMatchObject({ status: "reviewing", since: laterStill });
     repo.touchHeartbeat("a", "working", laterStill);
-    expect(repo.getBotStatus("a")).toMatchObject({ status: "reviewing", since: laterStill });
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "reviewing",
+      since: laterStill,
+      lastHeartbeatAt: laterStill,
+    });
 
     // A heartbeat cannot end derived working; only `offline` gets through.
     repo.setBotStatus({ ...(repo.getBotStatus("a") as Status), status: "working" });
@@ -224,7 +235,7 @@ describe("SQLite repository", () => {
     });
   });
 
-  it("brings an offline bot back to idle, even when the heartbeat says working or waiting", () => {
+  it("does not bring an offline bot back on a working or waiting heartbeat", () => {
     const { repo } = setup();
     repo.upsertBot(bot("a"));
     const offline = "2026-01-02T00:00:00.000Z";
@@ -243,14 +254,21 @@ describe("SQLite repository", () => {
     });
 
     for (const status of ["working", "waiting"] as const) {
-      expect(repo.touchHeartbeat("a", status, back)).toBe(true);
-      expect(repo.getBotStatus("a")).toMatchObject({ status: "idle", since: back });
-      expect(repo.listEventsSince(0).at(-1)).toMatchObject({
-        type: "status_changed",
-        status: "idle",
+      expect(repo.touchHeartbeat("a", status, back)).toBe(false);
+      expect(repo.getBotStatus("a")).toMatchObject({
+        status: "offline",
+        since: offline,
+        lastHeartbeatAt: offline,
       });
-      repo.setBotStatus({ ...(repo.getBotStatus("a") as Status), status: "offline" });
+      expect(repo.listEventsSince(0)).toEqual([]);
     }
+
+    expect(repo.touchHeartbeat("a", undefined, back)).toBe(true);
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "idle", since: back });
+    expect(repo.listEventsSince(0).at(-1)).toMatchObject({
+      type: "status_changed",
+      status: "idle",
+    });
   });
 
   it("releases task and handoff links when a heartbeat brings a bot to rest", () => {

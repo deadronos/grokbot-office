@@ -59,8 +59,8 @@ function parseStreamCursor(c: Context<AppEnv>): { since: number | undefined } | 
 /**
  * The live stream. Delivery is notify-then-pull: the hub says "something landed"
  * and each client drains `getEventsPage` from its own cursor, so the hidden-bot
- * filter of #7 applies to live and replayed events alike. Events are the only
- * payload besides pings.
+ * filter of #7 applies to live and replayed events alike. Besides events and
+ * pings, an id-less `refresh` frame asks the client to refetch the snapshot.
  */
 export function streamRoutes({
   repo,
@@ -99,6 +99,7 @@ export function streamRoutes({
       let cursor = start;
       let draining = false;
       let again = false;
+      let wantRefresh = false;
       let stopped = false;
       let timer: ReturnType<typeof setInterval> | undefined;
       let resolveEnded: (() => void) | undefined;
@@ -143,8 +144,15 @@ export function streamRoutes({
                 break;
               }
             }
+            if (wantRefresh) {
+              wantRefresh = false;
+              if (!stopped) {
+                // No `id:` line: this frame is not stored and must not move Last-Event-ID.
+                await stream.writeSSE({ event: "refresh", data: "{}" });
+              }
+            }
             // A notify during a drain sets `again`; a stopped stream returns above.
-          } while (again);
+          } while (again || wantRefresh);
         } finally {
           draining = false;
         }
@@ -152,6 +160,10 @@ export function streamRoutes({
 
       const client = {
         notify: () => void drain().catch(stop),
+        refresh: () => {
+          wantRefresh = true;
+          void drain().catch(stop);
+        },
         close: stop,
       };
       hub.add(client);

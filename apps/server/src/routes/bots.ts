@@ -54,6 +54,12 @@ export function botRoutes(repo: Repo, heartbeat: HeartbeatConfig, hub: StreamHub
     }
     const parsed = HeartbeatBody.safeParse(raw);
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+    if (parsed.data.status === "working" || parsed.data.status === "waiting") {
+      return c.json(
+        { error: "working/waiting are set by task and handoff events, not heartbeats" },
+        422,
+      );
+    }
 
     if (repo.touchHeartbeat(id, parsed.data.status, nowUtc())) hub.notify();
     return c.body(null, 204);

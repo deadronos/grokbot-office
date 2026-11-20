@@ -5,6 +5,8 @@
 export type StreamClient = {
   /** Ask the client to drain; it serializes its own drains. */
   notify: () => void;
+  /** Send an id-less, unstored `refresh` frame so the client refetches the snapshot. */
+  refresh: () => void;
   /** Ends the stream and unregisters it. */
   close: () => void;
 };
@@ -15,6 +17,8 @@ export type StreamHub = {
   remove: (client: StreamClient) => void;
   size: () => number;
   notify: () => void;
+  /** Broadcast a visibility refresh; not stored, so it has no event id. */
+  refresh: () => void;
   /** Ends every open stream (shutdown). */
   closeAll: () => void;
 };
@@ -31,6 +35,9 @@ export function createStreamHub(): StreamHub {
     size: () => clients.size,
     notify: () => {
       for (const client of clients) client.notify();
+    },
+    refresh: () => {
+      for (const client of clients) client.refresh();
     },
     closeAll: () => {
       // Set iteration tolerates the deletion each close performs.

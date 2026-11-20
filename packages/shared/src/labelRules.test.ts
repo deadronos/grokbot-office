@@ -56,7 +56,7 @@ const cases: { name: string; current: LabelState; event: LabelEvent; next: Label
   {
     name: "handoff_sent without a label clears an older label",
     current: workingOn,
-    event: { type: "handoff_sent" },
+    event: { type: "handoff_sent", taskId: "t1" },
     next: { status: "waiting", label: null, taskId: null },
   },
   {
@@ -87,6 +87,30 @@ const cases: { name: string; current: LabelState; event: LabelEvent; next: Label
     current: workingOn,
     event: { type: "handoff_accepted" },
     next: { status: "working", label: null, taskId: null },
+  },
+  {
+    name: "task_finished for a different task leaves the current work alone",
+    current: workingOn,
+    event: { type: "task_finished", taskId: "other" },
+    next: workingOn,
+  },
+  {
+    name: "task_finished with no task id, or the current task, clears the work",
+    current: workingOn,
+    event: { type: "task_finished", taskId: "t1" },
+    next: bot(),
+  },
+  {
+    name: "handoff_sent without a taskId while holding a task stays working",
+    current: workingOn,
+    event: { type: "handoff_sent", label: "side packet" },
+    next: workingOn,
+  },
+  {
+    name: "handoff_sent of the current task waits and takes the label",
+    current: workingOn,
+    event: { type: "handoff_sent", taskId: "t1", label: "review packet" },
+    next: { status: "waiting", label: "review packet", taskId: null },
   },
   {
     name: "task_finished clears the label and task link",

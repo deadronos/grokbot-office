@@ -246,8 +246,13 @@ canvas {
   font-weight: 600;
 }
 
-.hud-label,
 .hud-status {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.hud-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0.85;
