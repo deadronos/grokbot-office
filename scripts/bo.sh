@@ -25,11 +25,20 @@ usage: bo.sh <command> [args]
   accept <handoffId> [taskId]             handoff_accepted
   event '<json>'                          one raw event object, e.g.
                                           '{"type":"status_changed","status":"reviewing"}'
-                                          (botId and eventId are filled in)
+                                          (botId and eventId are filled in and may
+                                          not be supplied in the object)
 
-environment: BO_URL and BO_TOKEN are required, BO_BOT_ID (the slug the token is
-bound to) as well. register falls back to BO_NAME, BO_ROLE, BO_AVATAR and
-BO_POD (defaults: the bot id, "bot", "robot", "dev").
+environment (read by this script, never by the server):
+  BO_URL      required, Bot Office base URL
+  BO_TOKEN    required, this bot's token
+  BO_BOT_ID   required, the slug the token is bound to
+  BO_NAME     register name       (default: $BO_BOT_ID)
+  BO_ROLE     register role       (default: bot)
+  BO_AVATAR   register avatar     (default: robot)
+  BO_POD      register pod        (default: dev)
+
+Plain http to a host other than loopback prints a warning: the token would
+travel in the clear.
 
 Exit status is non-zero when the server answers outside 2xx.
 EOF
@@ -48,6 +57,15 @@ require_env() {
   # Tokens are base64url; anything else would also break the curl config quoting.
   [[ $BO_TOKEN =~ ^[A-Za-z0-9_-]+$ ]] || die "BO_TOKEN has unexpected characters"
   [[ $BO_BOT_ID =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || die "BO_BOT_ID is not a lowercase slug"
+  # Plain http to a real host sends the bearer token in the clear.
+  if [[ $BO_URL == http://* ]]; then
+    local authority=${BO_URL#http://}
+    authority=${authority%%/*}
+    case $authority in
+      localhost | localhost:* | 127.* | "[::1]" | "[::1]:"*) ;;
+      *) printf 'bo: warning: %s is plain http, the token is sent in the clear\n' "$BO_URL" >&2 ;;
+    esac
+  fi
 }
 
 work=$(mktemp -d)
@@ -62,8 +80,27 @@ new_id() {
   fi
 }
 
+# The inside of a JSON string: quotes, backslashes and every control character.
+# Labels stay on one line, so newlines/tabs become their JSON escapes, not drops.
 json_escape() {
-  printf '%s' "$1" | tr -d '\r\n\t' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  local text=$1 out='' char i code
+  # Double backslashes first so the loop below only has to look at the rest.
+  text=${text//\\/\\\\}
+  for ((i = 0; i < ${#text}; i++)); do
+    char=${text:i:1}
+    case $char in
+      '"') out+='\"' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      [[:cntrl:]])
+        printf -v code '%04x' "'$char"
+        out+="\u$code"
+        ;;
+      *) out+=$char ;;
+    esac
+  done
+  printf '%s' "$out"
 }
 
 # Seconds from the last response's Retry-After, or the default when absent/HTTP-date.
@@ -185,6 +222,10 @@ cmd_event() {
   raw=${raw#\{} # drop the opening brace, botId and eventId are added
   raw=${raw%\}} # and the closing one
   [[ -n ${raw//[[:space:]]/} ]] || die "event needs at least a type"
+  # The script owns the envelope; letting the body set these would be a 403 later.
+  if grep -Eq '"(botId|eventId)"[[:space:]]*:' <<<"$raw"; then
+    die "event must not set botId or eventId; the script adds them"
+  fi
   send "$raw"
 }
 

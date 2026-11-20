@@ -20,11 +20,19 @@ rather call the API themselves.
 
 You need the API base URL and a **bot token** bound to your bot's slug (the
 token decides the identity, not the body). Tokens are issued by the office
-admin and printed once:
+admin and printed once, but a token needs the bot row first, so create the bot:
 
 ```bash
-pnpm admin token create --kind bot --bot data
+pnpm admin bot create --id data --name Data --desk 0   # desk is optional
+pnpm admin token create --kind bot --bot data          # prints the token once
 ```
+
+`bot create` validates the id like the shared schemas (lowercase slug) and refuses an
+id that already exists. `--desk <n>` is the bot's own desk index in the fixed layout
+(`data`, `wesley`, `geordi`, `spock` in `dev`; `uhura`, `guinan`, `quark`, `worf` in
+`ops`; `lumi` in `command`) and is checked against that layout, so it cannot seat a
+bot at another bot's desk. Bots outside the layout are HUD-list only: give them
+`--pod` (default `dev`); `--role` and `--avatar` default to `bot` and `robot`.
 
 A bot token only works for its own bot id: a request for another bot answers
 `403`, like a token of the wrong kind. Missing, unknown and revoked tokens
@@ -200,8 +208,17 @@ token or puts it on a command line.
 It generates the `eventId` (and the `handoffId` for a send), retries a `429`
 after the server's `Retry-After` (up to three times, using the default of 2
 seconds when the header is missing or not a number), and exits non-zero on any
-other status. `register` falls back to `BO_NAME`, `BO_ROLE`, `BO_AVATAR` and
-`BO_POD` (defaults: the bot id, `bot`, `robot`, `dev`).
+other status. Labels and task ids are JSON-escaped as proper string contents
+(quotes, backslashes and control characters), so an invalid body does not go
+out. A raw `event` may not set `botId` or `eventId`: the script owns that
+envelope and refuses the override before sending (the server would answer
+`403`).
+
+`register` falls back to `BO_NAME`, `BO_ROLE`, `BO_AVATAR` and `BO_POD`
+(defaults: the bot id, `bot`, `robot`, `dev`). `bo.sh` warns when `BO_URL` is
+plain `http` to a host that is not loopback, because the bearer token would
+travel in the clear; it still sends the request, so use `https` (or a loopback
+tunnel) in practice.
 
 ## Auth
 

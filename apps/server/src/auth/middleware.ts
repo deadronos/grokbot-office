@@ -50,6 +50,18 @@ function failedAuthLimited(c: Context<AppEnv>): Response | undefined {
   return decision.allowed ? undefined : rateLimited(c, decision.retryAfterSec);
 }
 
+/**
+ * The cookie-failure ceiling. It stays high (600/min by default) so an honest stale
+ * cookie still gets its 401 and is cleared; an exhausted bucket answers 429 *before*
+ * the hash and lookup, which is the cost this ceiling exists to cap.
+ */
+function cookieFailureLimited(c: Context<AppEnv>): Response | undefined {
+  const limits = c.get("limits") as RateLimits | undefined;
+  if (!limits) return;
+  const decision = limits.cookieFailure(clientIp(c));
+  return decision.allowed ? undefined : rateLimited(c, decision.retryAfterSec);
+}
+
 export type ViewerValidation =
   | { ok: true; token: Token | undefined; session: Session | undefined; via?: "current" | "prev" }
   | { ok: false; status: 401 | 403; reason: string; tokenId?: string };
@@ -231,6 +243,13 @@ export function requireViewer({
     const now = nowUtc();
     const header = c.req.header("authorization");
     const secret = getCookie(c, SESSION_COOKIE_NAME);
+    // A cookie failure would still cost one hash and one lookup; check the ceiling
+    // first so a garbage-cookie flood stops paying that once it is spent.
+    if (header === undefined && secret !== undefined) {
+      // Scalar gate before the hash; the failure branch below spends the token.
+      const peek = (c.get("limits") as RateLimits | undefined)?.cookieFailurePeek(clientIp(c));
+      if (peek && !peek.allowed) return rateLimited(c, peek.retryAfterSec);
+    }
     const result = validateViewer({
       repo,
       adminToken,
@@ -242,14 +261,15 @@ export function requireViewer({
     });
     if (!result.ok) {
       // Bearer failures and unauthenticated requests spend their own buckets, counted
-      // only after they fail. No cookie failure does: Funnel and single-port clients all
-      // share one loopback IP, so a few garbage cookies per second would keep an honest
-      // stale-cookie viewer at 429. Answer 401 and clear the dead cookie before any
-      // limiter instead; each such request costs one hash and one indexed lookup.
+      // only after they fail. A cookie failure spends the per-IP cookie ceiling, which is
+      // high enough that an honest stale-cookie viewer still gets its 401 and only floods
+      // start paying: the check above already stopped an exhausted bucket before the hash.
       if (header !== undefined)
         return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
       if (secret === undefined)
         return ipLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
+      const cookieLimit = cookieFailureLimited(c);
+      if (cookieLimit) return cookieLimit;
       deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0));
       return reject(c, result.status, result.reason, result.tokenId);
     }

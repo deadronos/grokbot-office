@@ -181,6 +181,7 @@ describe("resolveRateLimitConfig", () => {
       burst: 20,
       ipPerMin: 30,
       ipBurst: 10,
+      cookieFailurePerMin: 600,
     });
   });
 
@@ -191,8 +192,9 @@ describe("resolveRateLimitConfig", () => {
         RATE_LIMIT_BURST: "30",
         RATE_LIMIT_IP_PER_MIN: "40",
         RATE_LIMIT_IP_BURST: "5",
+        RATE_LIMIT_COOKIE_PER_MIN: "120",
       }),
-    ).toEqual({ perMin: 120, burst: 30, ipPerMin: 40, ipBurst: 5 });
+    ).toEqual({ perMin: 120, burst: 30, ipPerMin: 40, ipBurst: 5, cookieFailurePerMin: 120 });
   });
 
   it("rejects a burst larger than its per-minute budget", () => {

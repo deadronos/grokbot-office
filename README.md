@@ -156,10 +156,17 @@ short, every `/api/admin/*` route answers 503. Generate one with
 The admin CLI talks to the database directly, so it needs no `ADMIN_TOKEN` locally:
 
 ```bash
+pnpm admin bot create --id data --name Data     # creates the row a bot token needs
 pnpm admin token create --kind bot --bot data   # prints the token once
 pnpm admin token list                           # prefix/kind/last used, never plaintext
 pnpm admin token revoke <token id>
 ```
+
+`bot create` validates the id like the shared schemas (lowercase slug) and refuses an
+existing bot. `--desk <n>` is the bot's own desk index in the fixed layout (for
+example `data` is `--desk 0` in the `dev` pod); it is optional and cannot put a bot
+at someone else's desk. Bots outside the layout are HUD-list only and take `--pod`
+(default `dev`); `--role` and `--avatar` default to `bot` and `robot`.
 
 ## Bot API
 
@@ -314,9 +321,10 @@ All three failure modes look the same from outside: a generic
 `401 {"error":"unauthorized"}`, like any other rejected credential. A session cookie
 that matches no live session (unknown, revoked, expired, idle, or past the rotation
 grace) also gets `Set-Cookie` clearing it (`Max-Age=0`), so the viewer shows its login
-form instead of retrying a dead cookie forever. Cookie failures never spend a rate-limit
-bucket, so a flood of garbage cookies from the shared loopback address cannot turn an
-honest stale cookie into `429`.
+form instead of retrying a dead cookie forever. Cookie failures spend only their own
+high per-address ceiling (`RATE_LIMIT_COOKIE_PER_MIN`, default 600), so a flood of
+garbage cookies from the shared loopback address cannot turn an honest stale cookie
+into `429` unless it exceeds that ceiling.
 
 Cookie-authenticated writes (`POST /api/session/logout`) are checked for CSRF:
 `Sec-Fetch-Site: same-origin` is accepted first. Otherwise a present `Origin` must
@@ -342,12 +350,12 @@ Two plus one token-bucket budgets apply: `RATE_LIMIT_PER_MIN` (default 60) with
 `RATE_LIMIT_IP_PER_MIN` (default 30) with `RATE_LIMIT_IP_BURST` (default 10) per client
 address for unauthenticated requests that present no credentials. Failed bearer/token
 attempts use a separate bucket with those same IP numbers, counted only after they fail,
-so a flood of bad tokens cannot turn a valid or expired cookie into `429`. Session
-cookies never use a bucket: one that matches no live session answers `401` and is
-cleared, before any limiter, so mistyped tokens, bad bot tokens and garbage cookies can
-all flood from one shared loopback IP (Funnel or single-port mode) without making a
-viewer with a stale cookie see `429` instead of the login form. Each such request costs
-one hash and one indexed lookup.
+so a flood of bad tokens cannot turn a valid or expired cookie into `429`. A cookie
+that matches no live session answers `401` and is cleared; each such failure spends one
+token of the separate `RATE_LIMIT_COOKIE_PER_MIN` ceiling (default 600 per address,
+checked before the hash once it is exhausted), so mistyped tokens, bad bot tokens and
+garbage cookies can all flood from one shared loopback IP (Funnel or single-port mode)
+without making a viewer with a stale cookie see `429` instead of the login form.
 Logout is not rate-limited: it revokes first (after the CSRF check) so a flood cannot
 leave a live cookie in place. In `VIEWER_TAILNET_ONLY` mode each port has its own
 buckets. A burst above its per-minute budget is rejected at startup. Over the limit the

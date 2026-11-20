@@ -195,12 +195,15 @@ export type RateLimitConfig = {
   burst: number;
   ipPerMin: number;
   ipBurst: number;
+  cookieFailurePerMin: number;
 };
 
 export const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 export const DEFAULT_RATE_LIMIT_BURST = 20;
 export const DEFAULT_RATE_LIMIT_IP_PER_MIN = 30;
 export const DEFAULT_RATE_LIMIT_IP_BURST = 10;
+/** A garbage cookie costs a hash and a lookup; a stale one must still get its 401. */
+export const DEFAULT_RATE_LIMIT_COOKIE_PER_MIN = 600;
 
 /** Per-token and per-IP request budgets; a burst larger than the minute budget is refused. */
 export function resolveRateLimitConfig(
@@ -230,7 +233,12 @@ export function resolveRateLimitConfig(
       `RATE_LIMIT_IP_BURST (${ipBurst}) must not exceed RATE_LIMIT_IP_PER_MIN (${ipPerMin})`,
     );
   }
-  return { perMin, burst, ipPerMin, ipBurst };
+  const cookieFailurePerMin = positiveInt(
+    env.RATE_LIMIT_COOKIE_PER_MIN,
+    DEFAULT_RATE_LIMIT_COOKIE_PER_MIN,
+    "RATE_LIMIT_COOKIE_PER_MIN",
+  );
+  return { perMin, burst, ipPerMin, ipBurst, cookieFailurePerMin };
 }
 
 /**

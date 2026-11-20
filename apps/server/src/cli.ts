@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 
+import { BotId, PODS, getDesk, type Pod } from "@grokbot-office/shared";
+
 import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
 import type { Repo } from "./db/repo.ts";
@@ -8,6 +10,7 @@ import { createSqliteRepo } from "./db/repo.ts";
 import { nowUtc } from "./time.ts";
 
 const USAGE = `usage:
+  bot create --id <slug> --name <name> [--desk <n>] [--pod <pod>] [--role <role>] [--avatar <avatar>]
   token create --kind <bot|viewer> [--bot <slug>]
   token list
   token revoke <token id>`;
@@ -17,6 +20,52 @@ export type Output = (line: string) => void;
 function flag(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index === -1 ? undefined : args[index + 1];
+}
+
+/**
+ * Creates the bot row a fresh bot needs before `token create --kind bot` can work.
+ * The layout is fixed, so `--desk` must name the bot's own desk index in its pod;
+ * bots without a desk take `--pod` (default `dev`) and sit in the HUD list only.
+ */
+export function botCreate(repo: Repo, args: string[], out: Output): void {
+  const id = flag(args, "--id");
+  if (id === undefined) throw new Error("--id <slug> is required");
+  const parsed = BotId.safeParse(id);
+  if (!parsed.success) throw new Error(`--id ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+  if (repo.getBot(parsed.data)) throw new Error(`bot "${parsed.data}" already exists`);
+
+  const desk = getDesk(parsed.data);
+  const deskFlag = flag(args, "--desk");
+  if (deskFlag !== undefined) {
+    if (desk === undefined) throw new Error(`bot "${parsed.data}" has no desk in the fixed layout`);
+    if (!/^\d+$/.test(deskFlag) || Number(deskFlag) !== desk.index) {
+      throw new Error(`desk for "${parsed.data}" is index ${desk.index}, got "${deskFlag}"`);
+    }
+  }
+
+  const pod = flag(args, "--pod") ?? desk?.pod ?? "dev";
+  if (!PODS.includes(pod as Pod)) throw new Error(`--pod must be one of ${PODS.join(", ")}`);
+  if (desk !== undefined && pod !== desk.pod) {
+    throw new Error(`bot "${parsed.data}" sits in pod ${desk.pod}, not ${pod}`);
+  }
+
+  const name = flag(args, "--name");
+  if (name === undefined) throw new Error("--name <name> is required");
+  const role = flag(args, "--role") ?? "bot";
+  const avatar = flag(args, "--avatar") ?? "robot";
+  const now = nowUtc();
+  repo.upsertBot({
+    id: parsed.data,
+    name,
+    role,
+    avatar,
+    pod: pod as Pod,
+    hidden: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+  out(`Created bot "${parsed.data}" (${pod}).`);
+  out(`Next: pnpm admin token create --kind bot --bot ${parsed.data}`);
 }
 
 export function tokenCreate(repo: Repo, args: string[], out: Output): void {
@@ -68,6 +117,10 @@ export function tokenRevoke(repo: Repo, args: string[], out: Output): void {
 /** Exported for tests: no process exit, no implicit I/O. */
 export function runCli(repo: Repo, argv: string[], out: Output): void {
   const [group, action, ...rest] = argv;
+  if (group === "bot") {
+    if (action === "create") return botCreate(repo, rest, out);
+    throw new Error(USAGE);
+  }
   if (group !== "token") throw new Error(USAGE);
   if (action === "create") return tokenCreate(repo, rest, out);
   if (action === "list") return tokenList(repo, out);
