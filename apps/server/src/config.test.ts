@@ -11,6 +11,7 @@ import {
   DEFAULT_SESSION_TTL_SEC,
   SESSION_MAX_PER_TOKEN_LIMIT,
   resolveHeartbeatConfig,
+  resolveHsts,
   resolveRetentionDays,
   resolveCorsOrigins,
   resolvePort,
@@ -262,5 +263,23 @@ describe("resolveViewerTailnetOnly", () => {
     expect(() => resolveViewerTailnetOnly({ VIEWER_TAILNET_ONLY: "yes" })).toThrow(
       /VIEWER_TAILNET_ONLY/,
     );
+  });
+});
+
+describe("resolveHsts", () => {
+  it("is off unless the deployment opts in", () => {
+    for (const value of [undefined, "", "false", "0"]) {
+      expect(resolveHsts({ HSTS: value })).toBe(false);
+    }
+  });
+
+  it("turns on for the documented truthy values", () => {
+    for (const value of ["true", "1", " TRUE "]) {
+      expect(resolveHsts({ HSTS: value })).toBe(true);
+    }
+  });
+
+  it("refuses an ambiguous value", () => {
+    expect(() => resolveHsts({ HSTS: "yes" })).toThrow(/HSTS/);
   });
 });

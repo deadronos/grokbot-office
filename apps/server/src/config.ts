@@ -276,8 +276,20 @@ export function resolvePort(
 export function resolveViewerTailnetOnly(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  const raw = env.VIEWER_TAILNET_ONLY?.trim().toLowerCase() ?? "";
-  if (raw === "" || raw === "false" || raw === "0") return false;
-  if (raw === "true" || raw === "1") return true;
-  throw new Error(`VIEWER_TAILNET_ONLY must be true, 1, false or 0, got "${raw}"`);
+  return booleanFlag(env.VIEWER_TAILNET_ONLY, "VIEWER_TAILNET_ONLY");
+}
+
+function booleanFlag(raw: string | undefined, name: string): boolean {
+  const value = raw?.trim().toLowerCase() ?? "";
+  if (value === "" || value === "false" || value === "0") return false;
+  if (value === "true" || value === "1") return true;
+  throw new Error(`${name} must be true, 1, false or 0, got "${value}"`);
+}
+
+/**
+ * `HSTS=true`: the deployment is always https, so every response pins it even when the
+ * request carries no https hint (Node behind the Tailscale TLS proxy sees `http`).
+ */
+export function resolveHsts(env: Record<string, string | undefined> = process.env): boolean {
+  return booleanFlag(env.HSTS, "HSTS");
 }

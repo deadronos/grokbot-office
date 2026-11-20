@@ -223,36 +223,43 @@ describe("rate limits", () => {
     expect((await res.json()) as object).toEqual({ error: "unauthorized" });
   });
 
-  it("counts an unknown cookie against the failed-auth bucket after it fails", async () => {
-    // A larger token burst so the valid cookie is not 429 from its own budget after
-    // login + the pre-flood probe; the failed-auth IP burst stays at 2.
-    const { app, db, viewer } = rateLimitedApp({
-      perMin: 60,
-      burst: 20,
-      ipPerMin: 60,
-      ipBurst: 2,
-    });
+  it("answers a stale cookie with 401 and clears it during a failed-bearer flood", async () => {
+    // Single-port/Funnel clients all share one loopback IP; the failed-auth burst of 2
+    // is what a garbage-token flood spends.
+    const { app, db, viewer } = rateLimitedApp();
     const cookie = sessionCookieHeader(
       await app.request("/api/session", {
         method: "POST",
         headers: { authorization: `Bearer ${viewer.token}` },
       }),
     );
-    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
+    // The row behind the cookie disappears (revoked elsewhere, DB reset): stale cookie.
+    db.prepare("delete from sessions").run();
 
+    const flood = () => app.request("/api/state", { headers: { authorization: "Bearer nope" } });
+    expect((await flood()).status).toBe(401);
+    expect((await flood()).status).toBe(401);
+    expect((await flood()).status).toBe(429);
+
+    // Garbage cookies never spend that bucket either, so they stay 401 rather than 429.
     const garbage = () =>
       app.request("/api/state", {
         headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
       });
-    expect((await garbage()).status).toBe(401);
-    expect((await garbage()).status).toBe(401);
-    expect((await garbage()).status).toBe(429);
+    for (let index = 0; index < 3; index += 1) {
+      expect((await garbage()).status).toBe(401);
+    }
 
-    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
-    db.prepare("update sessions set expires_at = ?").run("2000-01-01T00:00:00.000Z");
-    const expired = await app.request("/api/state", { headers: { cookie } });
-    expect(expired.status).toBe(401);
-    expect((await expired.json()) as object).toEqual({ error: "unauthorized" });
+    const stale = await app.request("/api/state", { headers: { cookie } });
+    expect(stale.status).toBe(401);
+    expect((await stale.json()) as object).toEqual({ error: "unauthorized" });
+    expect(
+      stale.headers
+        .getSetCookie()
+        .some(
+          (value) => value.startsWith(`${SESSION_COOKIE_NAME}=;`) && value.includes("Max-Age=0"),
+        ),
+    ).toBe(true);
   });
 
   it("keeps rate-limit buckets apart per surface", async () => {
@@ -447,5 +454,32 @@ describe("viewer static and HSTS", () => {
         "strict-transport-security",
       ),
     ).toBeNull();
+  });
+
+  it("sends HSTS on every surface when explicitly opted in", async () => {
+    const db = openDatabase(":memory:");
+    const repo = createSqliteRepo(db);
+    const hub = createStreamHub();
+    cleanups.push(() => {
+      hub.closeAll();
+      db.close();
+    });
+    const shared = {
+      repo,
+      adminToken: TEST_ADMIN_TOKEN,
+      heartbeat: resolveHeartbeatConfig({}),
+      hub,
+      session: resolveSessionConfig({}),
+      limits: createRateLimits(resolveRateLimitConfig({ RATE_LIMIT_PER_MIN: "1000000" })),
+      hsts: true,
+    };
+    // No request hint at all: HSTS=true asserts the deployment is always https.
+    for (const surface of ["all", "viewer", "bot"] as const) {
+      const res = await createApp({ ...shared, surface }).request(HEALTH_PATH);
+      expect([surface, res.headers.get("strict-transport-security")]).toEqual([
+        surface,
+        "max-age=31536000",
+      ]);
+    }
   });
 });

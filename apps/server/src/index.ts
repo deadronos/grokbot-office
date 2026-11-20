@@ -9,6 +9,7 @@ import {
   resolveCorsOrigins,
   resolveHeartbeatConfig,
   resolvePort,
+  resolveHsts,
   resolveRateLimitConfig,
   resolveRetentionDays,
   resolveSessionConfig,
@@ -34,6 +35,7 @@ const session = resolveSessionConfig(process.env);
 const rateLimitConfig = resolveRateLimitConfig(process.env);
 const corsOrigins = resolveCorsOrigins(process.env);
 const tailnetOnly = resolveViewerTailnetOnly(process.env);
+const hsts = resolveHsts(process.env);
 const port = resolvePort(process.env);
 const viewerPort = resolvePort(process.env, "VIEWER_PORT", DEFAULT_VIEWER_PORT);
 if (tailnetOnly && viewerPort === port) {
@@ -68,6 +70,7 @@ if (tailnetOnly) {
       session,
       limits: createRateLimits(rateLimitConfig),
       corsOrigins,
+      hsts,
       surface: "bot",
     }),
     "bot api",
@@ -82,6 +85,7 @@ if (tailnetOnly) {
       session,
       limits: createRateLimits(rateLimitConfig),
       corsOrigins,
+      hsts,
       surface: "viewer",
       webDist: existsSync(webDist) ? webDist : undefined,
     }),
@@ -98,6 +102,7 @@ if (tailnetOnly) {
       session,
       limits: createRateLimits(rateLimitConfig),
       corsOrigins,
+      hsts,
       webDist: existsSync(webDist) ? webDist : undefined,
     }),
     "",

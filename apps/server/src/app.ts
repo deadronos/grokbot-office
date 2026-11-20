@@ -45,12 +45,12 @@ const BASE_SECURITY_HEADERS: Record<string, string> = {
 const BOT_HEARTBEAT_PATH = /^\/api\/bots\/[^/]+\/heartbeat$/;
 
 /**
- * Send HSTS only when the request already looks like https. Node behind the
- * Tailscale TLS proxy sees `http`, and we do not want to pin a plain
- * `http://127.0.0.1:5173` Vite session. The signals are an https Origin or
- * Referer, or `X-Forwarded-Proto: https` (first hop). `X-Forwarded-For` stays
- * untrusted; a forged proto hint can only *add* this header, and browsers
- * ignore HSTS on a plain http response, so this is the safe simple option.
+ * Send HSTS when the request already looks like https, or when the deployment opted in
+ * with `HSTS=true` (always https). Node behind the Tailscale TLS proxy sees `http`, and
+ * we do not want to pin a plain `http://127.0.0.1:5173` Vite session. The signals are an
+ * https Origin or Referer, or `X-Forwarded-Proto: https` (first hop). `X-Forwarded-For`
+ * stays untrusted; a forged proto hint can only *add* this header, and browsers ignore
+ * HSTS on a plain http response, so this is the safe simple option.
  */
 function requestLooksHttps(c: Context): boolean {
   const proto = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
@@ -80,8 +80,9 @@ function isBotEndpoint(method: string, path: string): boolean {
  * tests create their own). `stream` shortens the ping interval and client cap in tests.
  * `session` carries the cookie lifetime, idle cutoff, rotation age and per-token cap;
  * `limits` is the rate limiter; `corsOrigins` are the exact browser origins allowed to
- * call the API with credentials. `surface` narrows the routes, and `webDist` (absolute)
- * lets the viewer surface serve the built web app.
+ * call the API with credentials. `surface` narrows the routes, `webDist` (absolute)
+ * lets the viewer surface serve the built web app, and `hsts` is the explicit
+ * `HSTS=true` opt-in for deployments that are always https.
  */
 export function createApp({
   repo,
@@ -93,6 +94,7 @@ export function createApp({
   corsOrigins = [],
   surface = "all",
   webDist,
+  hsts = false,
   stream = DEFAULT_STREAM_CONFIG,
 }: {
   repo: Repo;
@@ -104,6 +106,7 @@ export function createApp({
   corsOrigins?: readonly string[];
   surface?: Surface;
   webDist?: string;
+  hsts?: boolean;
   stream?: StreamConfig;
 }): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -128,9 +131,9 @@ export function createApp({
     }
     // The Funnel/bot port stays HSTS-free even with a proto hint; the viewer
     // surface (and the single-port app) only sends it when the request looks https.
+    // `HSTS=true` overrides both: the operator asserts the deployment is always https.
     if (
-      surface !== "bot" &&
-      requestLooksHttps(c) &&
+      (hsts || (surface !== "bot" && requestLooksHttps(c))) &&
       !c.res.headers.has("Strict-Transport-Security")
     ) {
       c.res.headers.set("Strict-Transport-Security", "max-age=31536000");
