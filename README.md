@@ -163,6 +163,10 @@ pnpm admin token revoke <token id>
 
 ## Bot API
 
+[docs/bot-integration.md](docs/bot-integration.md) is the bot-facing guide, and
+[scripts/bo.sh](scripts/bo.sh) wraps every call below in one line for bots
+(`bo.sh start "issue-14"`, `bo.sh handoff wesley "review docs"`).
+
 Bots authenticate with their own bot token and may only act for that bot id: a
 token bound elsewhere gets `403`, any missing/unknown/revoked token gets `401`.
 Auth errors are generic; the server logs the reason, never the token.

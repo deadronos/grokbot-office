@@ -9,7 +9,7 @@ import {
 } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
-import { createRateLimits } from "./rate-limit.ts";
+import { createRateLimits, type RateLimits } from "./rate-limit.ts";
 import type { StreamConfig } from "./routes/stream.ts";
 import { createStreamHub } from "./stream/hub.ts";
 
@@ -35,19 +35,23 @@ export function testSetup({
   heartbeat = resolveHeartbeatConfig({}),
   sessionTtlSec = DEFAULT_SESSION_TTL_SEC,
   session,
+  limits: limitsArg,
   stream,
 }: {
   adminToken?: string;
   heartbeat?: HeartbeatConfig;
   sessionTtlSec?: number;
   session?: Partial<SessionConfig>;
+  limits?: RateLimits;
   stream?: StreamConfig;
 } = {}) {
   const db = openDatabase(":memory:");
   const repo = createSqliteRepo(db);
   const hub = createStreamHub();
   // Far above what any existing test sends, so only the session/rate-limit tests trip it.
-  const limits = createRateLimits(resolveRateLimitConfig({ RATE_LIMIT_PER_MIN: "1000000" }));
+  // A caller passes its own when a test needs to trip a budget.
+  const limits =
+    limitsArg ?? createRateLimits(resolveRateLimitConfig({ RATE_LIMIT_PER_MIN: "1000000" }));
   const app = createApp({
     repo,
     adminToken,
