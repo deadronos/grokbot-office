@@ -311,7 +311,12 @@ read a new cookie) and re-checks the session by id, so a rotation does not kill 
 stream; a revoke, expiry or idle still does.
 
 All three failure modes look the same from outside: a generic
-`401 {"error":"unauthorized"}`, like any other rejected credential.
+`401 {"error":"unauthorized"}`, like any other rejected credential. A session cookie
+that matches no live session (unknown, revoked, expired, idle, or past the rotation
+grace) also gets `Set-Cookie` clearing it (`Max-Age=0`), so the viewer shows its login
+form instead of retrying a dead cookie forever. Cookie failures never spend a rate-limit
+bucket, so a flood of garbage cookies from the shared loopback address cannot turn an
+honest stale cookie into `429`.
 
 Cookie-authenticated writes (`POST /api/session/logout`) are checked for CSRF:
 `Sec-Fetch-Site: same-origin` is accepted first. Otherwise a present `Origin` must
@@ -336,10 +341,13 @@ Two plus one token-bucket budgets apply: `RATE_LIMIT_PER_MIN` (default 60) with
 `RATE_LIMIT_BURST` (default 20) per authenticated token or session, and
 `RATE_LIMIT_IP_PER_MIN` (default 30) with `RATE_LIMIT_IP_BURST` (default 10) per client
 address for unauthenticated requests that present no credentials. Failed bearer/token
-attempts, and unknown or unparseable session cookies, use a separate bucket with those
-same IP numbers, and are counted only after they fail, so a flood of bad tokens or
-garbage cookies cannot turn a valid or expired cookie into `429`. A flood of garbage
-cookies from the same address can `429` itself.
+attempts use a separate bucket with those same IP numbers, counted only after they fail,
+so a flood of bad tokens cannot turn a valid or expired cookie into `429`. Session
+cookies never use a bucket: one that matches no live session answers `401` and is
+cleared, before any limiter, so mistyped tokens, bad bot tokens and garbage cookies can
+all flood from one shared loopback IP (Funnel or single-port mode) without making a
+viewer with a stale cookie see `429` instead of the login form. Each such request costs
+one hash and one indexed lookup.
 Logout is not rate-limited: it revokes first (after the CSRF check) so a flood cannot
 leave a live cookie in place. In `VIEWER_TAILNET_ONLY` mode each port has its own
 buckets. A burst above its per-minute budget is rejected at startup. Over the limit the
@@ -357,7 +365,15 @@ with no `preload` only when the request already looks like https: an `Origin` or
 that is https, or `X-Forwarded-Proto: https`. Node behind the Tailscale TLS proxy still
 sees `http`, and a plain `http://127.0.0.1:5173` Vite session must not be HSTS-pinned.
 `X-Forwarded-For` stays untrusted; a forged proto hint can only add this header, and
-browsers ignore HSTS on a plain http response. The Funnel/bot surface never sends it.
+browsers ignore HSTS on a plain http response. The Funnel/bot surface never sends it on
+a hint.
+
+Because the default depends on request hints, a browser that types an https URL gets no
+HSTS header until it has sent an https `Origin` or `Referer`. A deployment that is always
+https can opt in explicitly with `HSTS=true` (or `1`): every response then carries
+`Strict-Transport-Security: max-age=31536000` on every surface, including the
+Funnel-facing bot port, with no hint required. Unset or `false` keeps the hint-based
+behaviour above; an unparseable value stops the server at startup.
 `/api` responses add a closed CSP (`default-src 'none'; frame-ancestors
 'none'; base-uri 'none'`); the web app is served with a CSP that allows only same-origin
 scripts and styles, with no `unsafe-eval` (`style-src` keeps `'unsafe-inline'` for React's

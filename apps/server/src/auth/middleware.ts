@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 
 import type { Repo, Session, Token } from "../db/repo.ts";
@@ -41,6 +41,7 @@ export function ipLimited(c: Context<AppEnv>): Response | undefined {
 /**
  * Failed bearer/token attempts are counted *after* they fail, in a bucket of their
  * own, so a flood of bad tokens cannot turn a valid or expired cookie into 429.
+ * Session cookies never use this bucket: see the failure branch in `requireViewer`.
  */
 function failedAuthLimited(c: Context<AppEnv>): Response | undefined {
   const limits = c.get("limits") as RateLimits | undefined;
@@ -240,15 +241,16 @@ export function requireViewer({
       graceSec: policy.graceSec,
     });
     if (!result.ok) {
-      // Bearer failures and unknown/unparseable cookies share the failed-auth bucket,
-      // counted only after they fail. A known cookie that is expired, idle or revoked
-      // still answers 401 even when that bucket is full.
+      // Bearer failures and unauthenticated requests spend their own buckets, counted
+      // only after they fail. No cookie failure does: Funnel and single-port clients all
+      // share one loopback IP, so a few garbage cookies per second would keep an honest
+      // stale-cookie viewer at 429. Answer 401 and clear the dead cookie before any
+      // limiter instead; each such request costs one hash and one indexed lookup.
       if (header !== undefined)
         return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
       if (secret === undefined)
         return ipLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
-      if (result.reason === "unknown session")
-        return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
+      deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0));
       return reject(c, result.status, result.reason, result.tokenId);
     }
 
