@@ -181,10 +181,27 @@ describe("POST /api/bots/:id/heartbeat", () => {
     expect((await heartbeat(app, "data", dataToken, {})).status).toBe(204);
     expect(repo.getBotStatus("data")?.status).toBe("idle");
 
-    expect((await heartbeat(app, "data", dataToken, { status: "working" })).status).toBe(204);
-    const working = repo.getBotStatus("data");
-    expect(working?.status).toBe("working");
-    expect(working?.since).toBe(working?.lastHeartbeatAt);
+    expect((await heartbeat(app, "data", dataToken, { status: "reviewing" })).status).toBe(204);
+    const reviewing = repo.getBotStatus("data");
+    expect(reviewing?.status).toBe("reviewing");
+    expect(reviewing?.since).toBe(reviewing?.lastHeartbeatAt);
+  });
+
+  it("rejects working or waiting heartbeats with 422 and does not change status", async () => {
+    const { app, repo, dataToken } = setup();
+    expect((await heartbeat(app, "data", dataToken, {})).status).toBe(204);
+    const before = repo.getBotStatus("data");
+
+    const message = "working/waiting are set by task and handoff events, not heartbeats";
+    for (const status of ["working", "waiting"] as const) {
+      const res = await heartbeat(app, "data", dataToken, { status });
+      expect(res.status).toBe(422);
+      expect((await res.json()) as object).toEqual({ error: message });
+    }
+
+    const after = repo.getBotStatus("data");
+    expect(after?.status).toBe("idle");
+    expect(after?.lastHeartbeatAt).toBe(before?.lastHeartbeatAt);
   });
 
   it("refreshes last_heartbeat_at and resets since only when the status changes", async () => {
@@ -203,7 +220,7 @@ describe("POST /api/bots/:id/heartbeat", () => {
       lastEventSeq: null,
     });
 
-    await heartbeat(app, "data", dataToken, { status: "working" });
+    await heartbeat(app, "data", dataToken);
     const same = repo.getBotStatus("data");
     expect(same?.since).toBe(old);
     expect(Date.parse(same?.lastHeartbeatAt ?? "")).toBeGreaterThan(Date.parse(old));

@@ -717,6 +717,28 @@ describe("GET /api/events", () => {
       expect(next.events.map((event) => event.seq)).toEqual([5]);
     });
 
+    it("does not leak a hidden bot through /api/events, including any bot_hidden frame", async () => {
+      const { app, repo, dataToken, viewerToken, ghostEvents } = hiddenSetup();
+      await post(app, dataToken, batch(ev(1, "task_started", { taskId: "t-1" })));
+      ghostEvents(
+        ghost(2, "task_started", { taskId: "classified", label: "classified" }),
+        ghost(3, "handoff_sent", { to: "data", handoffId: "h-secret", label: "classified" }),
+      );
+
+      const res = await getEvents(app, viewerToken);
+      const text = await res.text();
+      const body = JSON.parse(text) as EventsPage;
+      expect(body.events.map((event) => [event.seq, event.botId, event.type])).toEqual([
+        [1, "data", "task_started"],
+      ]);
+      expect(text).not.toContain("bot_hidden");
+      expect(text).not.toContain("ghost");
+      for (const secret of ["classified", "h-secret"]) expect(text).not.toContain(secret);
+      expect(JSON.stringify(repo.listEventsSince(0).map((event) => event.type))).not.toContain(
+        "bot_hidden",
+      );
+    });
+
     it("shows the history again once the bot is un-hidden", async () => {
       const { app, repo, viewerToken, ghostEvents } = hiddenSetup();
       ghostEvents(ghost(1, "task_started", { taskId: "classified" }));

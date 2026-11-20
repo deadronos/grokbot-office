@@ -6,6 +6,7 @@ import { BotId, RegisterBody } from "@grokbot-office/shared";
 import type { AppEnv } from "../auth/middleware.ts";
 import { issueToken } from "../auth/tokens.ts";
 import type { Repo, Token } from "../db/repo.ts";
+import type { StreamHub } from "../stream/hub.ts";
 import { nowUtc } from "../time.ts";
 
 const CreateTokenBody = z
@@ -39,7 +40,7 @@ export function tokenSummary(token: Token) {
   };
 }
 
-export function adminRoutes(repo: Repo) {
+export function adminRoutes(repo: Repo, hub: StreamHub) {
   const api = new Hono<AppEnv>();
 
   api.post("/tokens", async (c) => {
@@ -68,10 +69,17 @@ export function adminRoutes(repo: Repo) {
   api.patch("/bots/:id", async (c) => {
     const id = c.req.param("id");
     if (!BotId.safeParse(id).success) return c.json({ error: "invalid bot id" }, 400);
-    if (!repo.getBot(id)) return c.json({ error: "unknown bot" }, 404);
+    const before = repo.getBot(id);
+    if (!before) return c.json({ error: "unknown bot" }, 404);
     const parsed = PatchBotBody.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
-    const updated = repo.updateBot(id, { ...parsed.data, updatedAt: nowUtc() });
+    const now = nowUtc();
+    const updated = repo.updateBot(id, { ...parsed.data, updatedAt: now });
+    // Visibility is not a stored event: after the update commits, an id-less
+    // refresh frame tells open viewers to refetch the snapshot.
+    if (parsed.data.hidden !== undefined && parsed.data.hidden !== before.hidden) {
+      hub.refresh();
+    }
     return c.json(updated);
   });
 

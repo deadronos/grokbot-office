@@ -8,8 +8,10 @@ packet flying from desk to desk. Bots report in opt-in over small HTTPS calls
 This repository currently contains workspace tooling, CI, the API server and the
 web app. The web app signs a viewer in, keeps a zustand store in sync with the
 server (`GET /api/state` plus the SSE stream) and renders the static office scene:
-nine fixed desks, a placeholder low-poly bot per desk and name plates. Live status
-visuals, the HUD list/feed and handoff animation come in later issues.
+nine fixed desks, a low-poly bot per desk and name plates. Status visuals (desk colour,
+thought bubble, magnifier, dimming), the HUD bot list and event feed, and the handoff
+flash are wired to live store state; the packet/tray handoff animation and the bot
+details panel remain later issues.
 
 ## Stack
 
@@ -81,8 +83,13 @@ The zustand store holds the snapshot, applies stream events immutably (skipping
 so one desk can re-render on its own, and calls `invalidateScene()` so the on-demand
 Canvas redraws. A `bot_registered` event for a bot that was not in the snapshot
 refetches `GET /api/state`, because the frame does not carry name, role, avatar or pod.
-A `status_changed` event without a `label` keeps the current one (the server omits a
-null label on the wire, so an explicit clear never arrives). Top right: a sign-out
+A `status_changed` event without a `label` keeps the current one while the bot is
+working or waiting, and clears it when the event comes to rest (`idle`/`offline`).
+The HUD list (desk order) and event feed (newest 20) render as text only, and a
+handoff sets a `handoffFlash` the scene turns into a short beam. When the web app
+mounts it calls `isWebGlAvailable()` before loading the scene chunk, so a machine
+without WebGL goes straight to the fallback instead of the error boundary. Name
+plates sit high above the chair so they cannot cover the desk in front. Top right: a sign-out
 button, plus the connection indicator:
 
 - `live` – the stream is open and event frames or 25 s `ping` frames (`data: {}`) arrive
@@ -129,6 +136,7 @@ After changing `apps/server/src/db/schema.ts`, run
 SQLite cannot add `CHECK` or foreign-key constraints in place, so such a migration
 rebuilds the table; the migrator runs the whole migration set in one transaction with
 foreign-key enforcement off, and every query after startup runs with it on.
+If a local database already ran the unmerged 0008 from an earlier PR 45 head, delete that database file and let the server create a fresh one.
 
 ## Tokens
 
@@ -171,25 +179,28 @@ curl -sS -X POST http://127.0.0.1:8787/api/bots/register \
 # 200 {"id":"data","heartbeatIntervalSec":60,"timeoutSec":300}
 ```
 
-Heartbeat (keep-alive; the optional `status` is one of `idle`, `working`,
-`waiting`, `reviewing`, `offline`; an empty body is fine). A heartbeat is only a
-keep-alive: work state comes from events, so a live bot is never changed by it.
+Heartbeat (keep-alive; the optional `status` is one of `idle`, `reviewing`,
+`offline`; an empty body is fine). A heartbeat is only a keep-alive: work state
+comes from events, so it cannot set `working` or `waiting`. Those two values are
+rejected with `422 {"error":"working/waiting are set by task and handoff events, not heartbeats"}`
+and change nothing (not even `last_heartbeat_at`). It can still report a rest
+state (`idle`, `reviewing`) or `offline`.
 The server sweeps stale heartbeats every 15 seconds. A bot whose last heartbeat is
 older than `timeoutSec` is marked `offline`, its task, label and handoff links are
 cleared, its `since` moves, and the server appends an `offline` event that viewers
 receive over SSE. A bot that is already offline is left alone, and so is a bot with
-no status row (not yet online). A later heartbeat or re-register brings an offline
-bot back: an empty heartbeat or a re-register sets `idle`, an explicit non-`offline`
-status is honoured, `since` moves to now, and viewers receive a `status_changed`
-event. Already-online bots get no extra event. Hidden bots are updated in the
-database the same way; the existing hidden-bot filter keeps their events off the
-viewer snapshot and stream.
+no status row (not yet online). A later heartbeat (`idle`, `reviewing`, `offline`, or
+an empty body) or re-register brings an offline bot back to `idle` (or the rest
+status it sent). `since` moves to now and viewers receive a `status_changed` event.
+Already-online bots get no extra event. Hidden bots are updated in the database the
+same way; the existing hidden-bot filter keeps their events off the viewer snapshot
+and stream.
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots/data/heartbeat \
   -H "Authorization: Bearer $BOT_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"status":"working"}'
+  -d '{"status":"reviewing"}'
 # 204
 ```
 
@@ -230,8 +241,9 @@ The server derives `bot_status` from the events, in order:
 
 Whenever a bot comes to rest (`idle` or `offline`, from an event or a heartbeat) its
 `task_id`, `label`, `handoff_to` and `handoff_id` are cleared; a `status_changed` label
-still applies. A heartbeat `status` cannot end a derived `working`/`waiting` state unless
-it is `offline`. `since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
+still applies. A heartbeat `status` cannot end a derived `working`/`waiting` state
+unless it is `offline`; a `working` or `waiting` heartbeat is rejected with `422` and
+never brings an offline bot back. `since` only moves when the status itself moves. Handoffs are tracked in `handoffs`
 (`sent` → `accepted`). An event the server cannot apply (a handoff to itself or to an
 unknown bot, a reused `handoffId`, a handoff the bot may not accept) fails the whole
 batch with `422 {"error":"invalid event","index":1}`.
@@ -393,9 +405,9 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
         "z": 3,
         "facing": 3.14159
       },
-      "status": "working",
+      "status": "waiting",
       "label": "issue-7",
-      "taskId": "issue-7",
+      "handoffId": "h1",
       "since": "2026-01-01T00:00:00.000Z",
       "lastHeartbeatAt": "2026-01-01T00:00:00.000Z",
       "lastEventSeq": 42
@@ -415,6 +427,10 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
 }
 ```
 
+A bot that is `waiting` may also carry `handoffId`, the open handoff it is waiting
+on. The field is omitted when there is no such link, and it is scrubbed when that
+handoff is from or to a hidden bot.
+
 The shared fixed layout (`DESKS` / `getDesk` in `packages/shared`) is the only source
 of desks: only its bots carry `desk` (the others are HUD-list only), and there is no
 per-bot desk field in the database or in `PATCH /api/admin/bots/:id`. For a bot in the
@@ -427,6 +443,12 @@ still register, heartbeat and post events, but viewers never see the bot, its ev
 events that hand off to it, or open handoffs from or to it. The flag is read at request
 time, so un-hiding a bot shows its history again. `lastSeq` / `lastEventSeq` stay the
 global high-water mark, hidden events included, so `seq` has gaps for viewers.
+Toggling `hidden` in `PATCH /api/admin/bots/:id` is not stored as an event. After the
+bot row is updated, the stream sends an id-less `refresh` frame (`event: refresh`,
+`data: {}`, no `id:` line and no bot id). Open viewers refetch `GET /api/state` and
+replace their bot list and open handoffs from that snapshot. The replay and live
+stream never send a hidden bot's events, and a fresh session never sees that the bot
+was hidden.
 
 A visible bot accepting a handoff from a hidden sender leaks nothing from that side, and
 both scrubs happen at read time, so it does not matter whether the sender was hidden

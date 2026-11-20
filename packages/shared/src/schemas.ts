@@ -157,6 +157,7 @@ export const BotSnapshot = z.object({
   status: botStatusSchema,
   label: Label.optional(),
   taskId: TaskId.optional(),
+  handoffId: HandoffId.optional(),
   since: IsoDateTime,
   lastHeartbeatAt: IsoDateTime,
   lastEventSeq: z.number().int().nonnegative(),

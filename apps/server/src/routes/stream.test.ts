@@ -142,6 +142,50 @@ describe("GET /api/stream frames", () => {
   });
 });
 
+describe("GET /api/stream hidden bot", () => {
+  it("does not stream a hidden bot's events or a bot_hidden frame", async () => {
+    const { app, repo, viewerToken, dataToken } = setup();
+    repo.upsertBot({ ...botRecord("ghost"), hidden: true });
+    repo.applyEvents(
+      "ghost",
+      [
+        {
+          botId: "ghost",
+          eventId: ulid(1),
+          type: "task_started",
+          taskId: "classified",
+          label: "classified",
+        },
+        {
+          botId: "ghost",
+          eventId: ulid(2),
+          type: "handoff_sent",
+          to: "data",
+          handoffId: "h-secret",
+          label: "classified",
+        },
+      ] as never,
+      NOW,
+    );
+    const sse = new Sse(await open(app, auth(viewerToken), "/api/stream?since=0"));
+    expect((await sse.nextRaw()).comment).toBe("open");
+
+    const visible = await post(app, dataToken, [
+      { botId: "data", eventId: ulid(3), type: "status_changed", status: "idle" },
+    ]);
+    expect(visible.status).toBe(200);
+
+    const frame = await sse.next();
+    expect(frame.event).toBe("event");
+    const payload = JSON.parse(frame.data) as { botId: string; type: string };
+    expect(payload).toMatchObject({ botId: "data", type: "status_changed" });
+    expect(frame.data).not.toContain("bot_hidden");
+    expect(frame.data).not.toContain("ghost");
+    for (const secret of ["classified", "h-secret"]) expect(frame.data).not.toContain(secret);
+    await sse.cancel();
+  });
+});
+
 describe("GET /api/stream opening", () => {
   it("writes a retry + comment frame first, so EventSource opens at once", async () => {
     const { app, viewerToken } = setup();

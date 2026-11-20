@@ -6,6 +6,7 @@ export type StreamHandlers = {
   onOpen: () => void;
   onPing: () => void;
   onEvent: (event: StreamEvent) => void;
+  onRefresh: () => void;
   onError: () => void;
 };
 
@@ -40,6 +41,9 @@ export function openMessageStream(handlers: StreamHandlers, since: number): () =
   source.addEventListener("event", (frame) => {
     const event = parseFrame((frame as MessageEvent).data);
     if (event) handlers.onEvent(event);
+  });
+  source.addEventListener("refresh", () => {
+    handlers.onRefresh();
   });
   return () => source.close();
 }

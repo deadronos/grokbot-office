@@ -4,7 +4,7 @@ export const BOT_STATUSES = ["idle", "working", "waiting", "reviewing", "offline
 export const botStatusSchema = z.enum(BOT_STATUSES);
 export type BotStatus = z.infer<typeof botStatusSchema>;
 
-/** Client-submittable event types; `offline` and `bot_registered` are server-only. */
+/** Client-submittable event types; the server-only ones are never accepted from a bot. */
 export const CLIENT_EVENT_TYPES = [
   "status_changed",
   "task_started",

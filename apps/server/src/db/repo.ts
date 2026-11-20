@@ -18,7 +18,8 @@ import {
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
-import type { EventIn } from "@grokbot-office/shared";
+import type { EventIn, LabelEvent } from "@grokbot-office/shared";
+import { applyLabelRule, isSideHandoff, shouldRestSender } from "@grokbot-office/shared";
 
 import { toUtc } from "../time.ts";
 import { botStatus, bots, events, handoffs, sessions, tokens } from "./schema.ts";
@@ -72,15 +73,19 @@ const RELEASED_LINKS = {
 
 /**
  * The status a heartbeat leaves behind. A heartbeat is a keep-alive, not a task event:
- * it cannot end derived `working`/`waiting` (only events or `offline` can), and moving
- * to `idle`/`offline` releases the task and handoff links. An offline bot comes back
- * on any heartbeat: empty → `idle`, or the explicit non-offline status.
+ * it can never enter the event-derived `working`/`waiting` states (it only refreshes
+ * `last_heartbeat_at`) and cannot leave them either, except with `offline`. Moving to
+ * `idle`/`offline` releases the task and handoff links. An offline bot comes back on
+ * a keep-alive or a rest status (`idle`, `reviewing`); `working`/`waiting` are rejected
+ * at the route and are a no-op here.
  */
 export function heartbeatPatch(
   current: Pick<Status, "status"> | undefined,
   status: Status["status"] | undefined,
 ): Partial<Status> | undefined {
-  if (current?.status === "offline") {
+  if (status === "working" || status === "waiting") return undefined;
+  const offline = current?.status === "offline";
+  if (offline) {
     if (status === "offline") return undefined;
     const next = status ?? "idle";
     return RESTING_STATUSES.includes(next) ? { status: next, ...RELEASED_LINKS } : { status: next };
@@ -125,7 +130,8 @@ export interface Repo {
    * Viewer page, one read transaction: up to `limit + 1` visible events after `seq`,
    * ascending (the extra row tells `hasMore`), plus the global `events.seq`
    * high-water mark (0 when empty). Events of hidden bots, as sender or as handoff
-   * target, are skipped.
+   * target, are skipped. Visibility changes are not stored as events; open viewers
+   * are told to refetch the snapshot instead.
    */
   getEventsPage(seq: number, limit: number): { rows: Event[]; lastSeq: number };
   /** Bots, statuses, open handoffs and the event high-water mark in one transaction. */
@@ -241,6 +247,36 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       return { ...s, label: ownLabels.get(key) ?? null };
     });
   };
+  /**
+   * Read-time handoff-link scrub: a visible bot waiting on a handoff from or to a
+   * hidden bot must not expose that handoff id on the snapshot. Un-hiding restores it.
+   */
+  const scrubHiddenHandoffLinks = (reader: Reader, statuses: Status[]): Status[] => {
+    const linked = [
+      ...new Set(statuses.flatMap((s) => (s.handoffId === null ? [] : [s.handoffId]))),
+    ];
+    if (linked.length === 0) return statuses;
+    const hiddenIds = hiddenBotIds(reader);
+    const hiddenLinks = new Set(
+      reader
+        .select({ id: handoffs.id })
+        .from(handoffs)
+        .where(
+          and(
+            inArray(handoffs.id, linked),
+            or(inArray(handoffs.fromBotId, hiddenIds), inArray(handoffs.toBotId, hiddenIds)),
+          ),
+        )
+        .all()
+        .map((row) => row.id),
+    );
+    if (hiddenLinks.size === 0) return statuses;
+    return statuses.map((s) =>
+      s.handoffId !== null && hiddenLinks.has(s.handoffId)
+        ? { ...s, handoffId: null, handoffTo: null }
+        : s,
+    );
+  };
   /** Subquery of hidden bot ids, read live: un-hiding a bot shows its history again. */
   const hiddenBotIds = (reader: Reader) =>
     reader.select({ id: bots.id }).from(bots).where(eq(bots.hidden, true));
@@ -302,6 +338,8 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
       }),
     touchHeartbeat: (botId, status, now) =>
       db.transaction((tx) => {
+        // The route already 422s these; leave the row (or its absence) untouched.
+        if (status === "working" || status === "waiting") return false;
         const existing = tx.select().from(botStatus).where(eq(botStatus.botId, botId)).get();
         const patch = heartbeatPatch(existing, status);
         if (!existing) {
@@ -419,7 +457,10 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           // Layout order is applied by the route; the DB only gives a stable base order.
           .orderBy(asc(bots.id))
           .all(),
-        statuses: scrubHiddenLabels(tx, tx.select().from(botStatus).all()),
+        statuses: scrubHiddenHandoffLinks(
+          tx,
+          scrubHiddenLabels(tx, tx.select().from(botStatus).all()),
+        ),
         // A handoff from or to a hidden bot stays out, like the bot itself.
         openHandoffs: tx
           .select()
@@ -448,22 +489,29 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .where(eq(botStatus.botId, botId))
           .get() as Status;
 
-        // `since` only moves when the status itself moves.
-        // Coming to rest (idle/offline) always releases task and handoff links;
-        // an explicit label in the same patch (status_changed) still applies.
-        const change = (patch: Partial<Status>) => {
-          const next = patch.status ?? status.status;
-          const released = RESTING_STATUSES.includes(next) ? RELEASED_LINKS : {};
-          // A new label has a new source: only an accept names a handoff for it.
-          const source =
-            "label" in patch && !("labelHandoffId" in patch) ? { labelHandoffId: null } : {};
+        // `since` only moves when the status itself moves. The shared label table
+        // owns status, label and task; the released links and label source are ours.
+        const change = (event: LabelEvent, extra: Partial<Status> = {}) => {
+          const next = applyLabelRule(
+            { status: status.status, label: status.label, taskId: status.taskId },
+            event,
+          );
+          const released = RESTING_STATUSES.includes(next.status) ? RELEASED_LINKS : {};
+          // Only a busy status_changed without a label keeps the label's source;
+          // any new label has a new source (only an accept names a handoff for it).
+          const keepSource =
+            event.type === "status_changed" &&
+            event.label === undefined &&
+            next.label === status.label;
           status = {
             ...status,
             ...released,
-            ...source,
-            ...patch,
-            status: next,
-            since: next === status.status ? status.since : now,
+            ...(keepSource ? undefined : { labelHandoffId: null }),
+            ...extra,
+            status: next.status,
+            label: next.label,
+            taskId: next.taskId,
+            since: next.status === status.status ? status.since : now,
           };
         };
 
@@ -484,30 +532,21 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
 
           switch (input.type) {
             case "status_changed":
-              // An omitted label on a non-resting status keeps the stored one
-              // (and its labelHandoffId). Resting statuses still clear links via
-              // RELEASED_LINKS; an explicit label in the same event still wins.
+              // The shared table keeps the stored label on a busy status when the
+              // event has none, and clears it (with the task) when resting.
               change(
                 input.label !== undefined
-                  ? { status: input.status, label: input.label }
-                  : { status: input.status },
+                  ? { type: "status_changed", status: input.status, label: input.label }
+                  : { type: "status_changed", status: input.status },
               );
               break;
             case "task_started":
-              change({
-                status: "working",
-                taskId: input.taskId ?? null,
-                label: input.label ?? null,
-              });
+              change({ type: "task_started", taskId: input.taskId, label: input.label });
               break;
             case "task_finished": {
-              // The result lives on the event only. Finishing a task the bot is not on
-              // (both ids known and different) is recorded but leaves the current work alone.
-              const otherTask =
-                input.taskId !== undefined &&
-                status.taskId !== null &&
-                input.taskId !== status.taskId;
-              if (!otherTask) change({ status: "idle" });
+              // The result lives on the event only. The shared rule records a finish
+              // for another task but leaves the current work alone.
+              change({ type: "task_finished", taskId: input.taskId });
               break;
             }
             case "handoff_sent": {
@@ -536,15 +575,11 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                 })
                 .run();
               // Another open task keeps the sender working; handing off its own task waits.
-              const otherTask = status.taskId !== null && status.taskId !== (input.taskId ?? null);
-              if (!otherTask) {
-                change({
-                  status: "waiting",
-                  taskId: null,
-                  handoffTo: input.to,
-                  handoffId: input.handoffId,
-                  label: input.label ?? null,
-                });
+              if (!isSideHandoff(status.taskId, input.taskId)) {
+                change(
+                  { type: "handoff_sent", label: input.label, taskId: input.taskId },
+                  { handoffTo: input.to, handoffId: input.handoffId },
+                );
               }
               break;
             }
@@ -563,17 +598,21 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   .set({ state: "accepted", acceptedAt: now })
                   .where(eq(handoffs.id, handoff.id))
                   .run();
-                change({
-                  status: "working",
-                  // The receiver now works on the handed-off task, not whatever it had before.
-                  taskId: input.taskId ?? null,
-                  label: handoff.label ?? input.label ?? null,
-                  // Remember where the label came from: while the sender is hidden, viewers
-                  // see the accept event's own label instead (read time, see getSnapshot).
-                  labelHandoffId: handoff.label === null ? null : handoff.id,
-                  handoffTo: null,
-                  handoffId: null,
-                });
+                change(
+                  {
+                    type: "handoff_accepted",
+                    taskId: input.taskId,
+                    label: input.label,
+                    handoffLabel: handoff.label,
+                  },
+                  {
+                    // Remember where the label came from: while the sender is hidden,
+                    // viewers see the accept event's own label instead (read time).
+                    labelHandoffId: handoff.label === null ? null : handoff.id,
+                    handoffTo: null,
+                    handoffId: null,
+                  },
+                );
                 const sender = tx
                   .select()
                   .from(botStatus)
@@ -581,7 +620,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                   .get();
                 // Only the handoff the sender is waiting on releases it; accepting a
                 // side handoff to the same receiver leaves it waiting.
-                if (sender && sender.status === "waiting" && sender.handoffId === handoff.id) {
+                if (sender && shouldRestSender(sender, handoff.id)) {
                   tx.update(botStatus)
                     .set({ status: "idle", since: now, ...RELEASED_LINKS })
                     .where(eq(botStatus.botId, sender.botId))
