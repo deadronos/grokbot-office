@@ -32,10 +32,13 @@ scripts/bo.sh handoff <bot> "<label>" [taskId]   # prints "handoffId: ..." on st
 scripts/bo.sh accept <handoffId> [taskId]
 ```
 
+`handoff <bot>` takes the receiver's lowercase bot id/slug; a display name such
+as `Wesley` returns a 400 because `to` is a `BotId`.
+
 Curl is only a fallback: `POST $BO_URL/api/events`. Pass the authorization
-header through a curl config on stdin, never on the command line or in
-`--header` argv, and cap it at `--max-time 5` — see the `bo()` helper and the
-event bodies in `docs/bot-integration.md`.
+header through a curl config on stdin (`--config -`), never on the command line
+or in `--header` argv, and cap it at `--max-time 5` — see the `bo()` helper and
+the event bodies in `docs/bot-integration.md`.
 
 ## Labels
 
