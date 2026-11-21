@@ -55,22 +55,38 @@ function parseEventsQuery(
   }
   const parsed = EventsQuery.safeParse(raw);
   if (!parsed.success) return undefined;
-  const { from, to } = parsed.data;
-  // The window is half-open: an empty or reversed range is a caller error.
-  if (from !== undefined && to !== undefined && from >= to) return undefined;
-  if (
-    from !== undefined &&
-    to !== undefined &&
-    Date.parse(to) - Date.parse(from) > EVENTS_WINDOW_MAX_MS
-  ) {
-    return undefined;
-  }
+  const window = resolveWindow(parsed.data.from, parsed.data.to);
+  if (!window) return undefined;
   return {
     since: parsed.data.since ?? 0,
     limit: parsed.data.limit ?? EVENTS_LIMIT_DEFAULT,
-    from,
-    to,
+    from: window.from,
+    to: window.to,
   };
+}
+
+/**
+ * The window is half-open `[from, to)` on `received_at`. A one-sided window is capped,
+ * never left open: `from` alone ends at now and is refused past the cap (the caller's
+ * lower bound is dropped otherwise), while `to` alone starts eight days before `to`
+ * (the missing start was never asked for). A bare `since`/`limit` keeps the whole log.
+ * An empty or reversed range is a caller error.
+ */
+function resolveWindow(
+  from: string | undefined,
+  to: string | undefined,
+): { from?: string; to?: string } | undefined {
+  const end = to ?? (from === undefined ? undefined : nowUtc());
+  const start =
+    from ??
+    (end === undefined
+      ? undefined
+      : new Date(Date.parse(end) - EVENTS_WINDOW_MAX_MS).toISOString());
+  if (start === undefined || end === undefined) return { from: start, to: end };
+  if (start >= end || Date.parse(end) - Date.parse(start) > EVENTS_WINDOW_MAX_MS) {
+    return undefined;
+  }
+  return { from: start, to: end };
 }
 
 /**
