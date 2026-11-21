@@ -5,13 +5,13 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "dev": "node --env-file-if-exists=../../.env --watch src/index.ts",
-    "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "build": "rm -rf dist && esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node24 --outdir=dist --external:better-sqlite3 && cp -R drizzle dist/drizzle",
+    "dev": "node --watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "rm -rf dist && esbuild src/index.ts src/cli.ts --bundle --minify --platform=node --format=esm --target=node24 --outdir=dist --external:better-sqlite3 && cp -R drizzle dist/drizzle",
     "typecheck": "tsc",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "admin": "node --env-file-if-exists=../../.env src/cli.ts"
+    "admin": "node src/cli.ts"
   },
   "dependencies": {
     "@grokbot-office/shared": "workspace:*",

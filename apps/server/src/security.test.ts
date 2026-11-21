@@ -283,7 +283,8 @@ describe("rate limits", () => {
         headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
       });
 
-    // Two failures fit the ceiling; the third answers 429 and is cleared again.
+    // Two failures fit the ceiling; the third answers 429 before the cookie is
+    // cleared, so the response carries no clearing Set-Cookie.
     expect((await garbage()).status).toBe(401);
     expect((await garbage()).status).toBe(401);
     const limited = await garbage();
