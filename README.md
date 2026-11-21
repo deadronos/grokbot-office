@@ -53,6 +53,18 @@ on `http://127.0.0.1:5173` and on `http://localhost:5173`. There is no separate
 dev-TLS setup. The dev server listens on `127.0.0.1` only, so `http://[::1]:5173`
 will not connect.
 
+## Run it on a Mac
+
+[docs/runbook-mac.md](docs/runbook-mac.md) is the operator guide for running the
+built server under a launchd agent and reaching it through Tailscale Funnel (public
+bot API) with a private viewer over Tailscale Serve. It includes the env file outside
+the repo, start/stop/logs/upgrade commands, HSTS and proxy notes, rate limits behind
+the shared loopback address, a sleep note, SQLite backups and rollback steps. The
+LaunchAgent plist in it is an example under `deploy/launchd/`; nothing installs it.
+
+Architecture decisions are in [docs/adr/](docs/adr/): Hono, Drizzle + SQLite, SSE,
+and Tailscale Funnel with a private viewer.
+
 ## Web app (viewer)
 
 The web app is private too. On first load it calls `GET /api/state` with
