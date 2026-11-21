@@ -1,4 +1,4 @@
-import type { Handoff } from "@grokbot-office/shared";
+import type { Handoff, StreamEvent } from "@grokbot-office/shared";
 
 import { DESK_STATIONS, type DeskStation } from "./deskStations";
 
@@ -29,6 +29,8 @@ export type PacketTimeline = {
   sentAt: number | null;
   /** `performance.now()` when the accept arrived; null while the handoff is open. */
   acceptedAt: number | null;
+  /** Stable tray slot for this receiver; assigned once when the packet appears. */
+  slot: number;
 };
 
 export type PacketPhase = "flying" | "landed" | "picking" | "gone";
@@ -88,6 +90,19 @@ export function pickupPosition(tray: Point, station: DeskStation, t: number): Po
   ];
 }
 
+/** Where an accept lifts the packet from: mid-arc if it was still flying, else the tray. */
+function pickupOrigin(
+  packet: PacketTimeline,
+  from: DeskStation,
+  to: DeskStation,
+  slot: number,
+): Point {
+  const tray = traySlotPoint(to, slot);
+  if (packet.sentAt === null || packet.acceptedAt === null) return tray;
+  const progress = (packet.acceptedAt - packet.sentAt) / PACKET_FLIGHT_MS;
+  return progress >= 1 ? tray : packetPosition(packetStartPoint(from), tray, progress);
+}
+
 /** Where one handoff's packet is in its lifecycle right now. */
 export function packetPhase(
   packet: PacketTimeline,
@@ -120,27 +135,70 @@ export function packetPose(
   }
   if (phase === "picking") {
     const progress = (now - (packet.acceptedAt ?? now)) / PACKET_PICKUP_MS;
-    return pickupPosition(tray, to, progress);
+    // An accept mid-air keeps the arc's position, so the packet never teleports.
+    return pickupPosition(pickupOrigin(packet, from, to, slot), to, progress);
   }
   return tray;
 }
 
-/** Deterministic tray slot per handoff: snapshot packets first, then sends in order. */
-export function traySlots(packets: readonly PacketTimeline[]): ReadonlyMap<string, number> {
+/**
+ * Tray slots per handoff, keeping assignments that survived from `previous`.
+ * A landed packet never slides when another one leaves its desk; a new packet
+ * takes the lowest free slot.
+ */
+export function traySlots(
+  packets: readonly PacketTimeline[],
+  previous: ReadonlyMap<string, number> = new Map(),
+): ReadonlyMap<string, number> {
   const ordered = packets.toSorted((a, b) => {
     const left = a.sentAt ?? Number.NEGATIVE_INFINITY;
     const right = b.sentAt ?? Number.NEGATIVE_INFINITY;
     if (left !== right) return left < right ? -1 : 1;
     return a.handoffId.localeCompare(b.handoffId);
   });
-  const nextSlot = new Map<string, number>();
+  const taken = new Map<string, Set<number>>();
   const slots = new Map<string, number>();
+  const claim = (botId: string, slot: number): boolean => {
+    const used = taken.get(botId) ?? new Set<number>();
+    if (used.has(slot)) return false;
+    used.add(slot);
+    taken.set(botId, used);
+    return true;
+  };
   for (const packet of ordered) {
-    const slot = nextSlot.get(packet.toBotId) ?? 0;
+    const slot = previous.get(packet.handoffId);
+    if (slot !== undefined && claim(packet.toBotId, slot)) slots.set(packet.handoffId, slot);
+  }
+  for (const packet of ordered) {
+    if (slots.has(packet.handoffId)) continue;
+    let slot = 0;
+    while (!claim(packet.toBotId, slot)) slot += 1;
     slots.set(packet.handoffId, slot);
-    nextSlot.set(packet.toBotId, slot + 1);
   }
   return slots;
+}
+
+/**
+ * Live `handoff_sent` events newer than `lastConsumedSeq`, keyed by handoff id.
+ * Ids come from the events, never from a `{from,to}` flash: a replay batch can
+ * carry several sends for one pair, and a snapshot's own sends are not live.
+ */
+export function liveSendsFromEvents(input: {
+  events: readonly StreamEvent[];
+  lastConsumedSeq: number;
+  now: number;
+  reducedMotion: boolean;
+}): { liveSends: Map<string, number>; lastConsumedSeq: number } {
+  const { events, now, reducedMotion } = input;
+  const liveSends = new Map<string, number>();
+  let lastConsumedSeq = input.lastConsumedSeq;
+  for (const event of events) {
+    if (event.seq <= input.lastConsumedSeq) continue;
+    lastConsumedSeq = Math.max(lastConsumedSeq, event.seq);
+    if (reducedMotion || event.type !== "handoff_sent" || !event.handoffId) continue;
+    liveSends.set(event.handoffId, now);
+  }
+  return { liveSends, lastConsumedSeq };
 }
 
 /** True while a packet is flying or being picked up: the demand loop must keep running. */
@@ -156,6 +214,18 @@ export type SyncPacketsInput = {
   now: number;
   reducedMotion: boolean;
 };
+
+/** Carries slot assignments over from the previous layout; new packets take a free one. */
+function withSlots(
+  packets: PacketTimeline[],
+  previous: readonly PacketTimeline[],
+): PacketTimeline[] {
+  const slots = traySlots(
+    packets,
+    new Map(previous.map((packet) => [packet.handoffId, packet.slot])),
+  );
+  return packets.map((packet) => ({ ...packet, slot: slots.get(packet.handoffId) ?? 0 }));
+}
 
 /**
  * Rebuilds the packet list from the store's open handoffs: new live sends fly,
@@ -178,17 +248,23 @@ export function syncPackets(input: SyncPacketsInput): PacketTimeline[] {
       toBotId: handoff.toBotId,
       sentAt: reducedMotion ? null : (liveSends.get(handoff.id) ?? null),
       acceptedAt: null,
+      slot: 0,
     });
   }
   // Toggling reduced motion on mid-flight snaps everything straight to the tray.
-  if (reducedMotion) return next.map((packet) => ({ ...packet, sentAt: null }));
+  if (reducedMotion) {
+    return withSlots(
+      next.map((packet) => ({ ...packet, sentAt: null })),
+      previous,
+    );
+  }
   for (const packet of previous) {
     if (openHandoffs.some((handoff) => handoff.id === packet.handoffId)) continue;
     const acceptedAt = packet.acceptedAt ?? now;
     // The count already dropped with the handoff; the pickup is only the visual.
     if (now - acceptedAt < PACKET_PICKUP_MS) next.push({ ...packet, acceptedAt });
   }
-  return next;
+  return withSlots(next, previous);
 }
 
 /**
