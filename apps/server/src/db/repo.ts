@@ -530,6 +530,8 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
             continue;
           }
 
+          // A second accept is a no-op, but still counts as a heartbeat: no row.
+          let record = true;
           switch (input.type) {
             case "status_changed":
               // The shared table keeps the stored label on a busy status when the
@@ -626,13 +628,16 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
                     .where(eq(botStatus.botId, sender.botId))
                     .run();
                 }
-              } else if (handoff.state !== "accepted") {
+              } else if (handoff.state === "accepted") {
+                record = false;
+              } else {
                 throw new InvalidEventError(index, "handoff is not sent");
               }
               break;
             }
           }
 
+          if (!record) continue;
           tx.insert(events)
             .values({
               eventId: input.eventId,

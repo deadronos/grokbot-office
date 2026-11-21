@@ -183,14 +183,15 @@ describe("POST /api/events", () => {
     // The sender was only waiting for this.
     expect(repo.getBotStatus("data")).toMatchObject({ status: "idle", handoffTo: null });
 
-    // A second acceptance with a new event id is another no-op, not an error.
+    // A second acceptance with a new event id is another no-op, not an error,
+    // and stores nothing: the replay cursor must not move.
     const again = await post(
       app,
       wesleyToken,
       batch({ botId: "wesley", eventId: ulid(3), type: "handoff_accepted", handoffId: "h1" }),
     );
     expect(again.status).toBe(200);
-    await expect(again.json()).resolves.toEqual({ accepted: 1, duplicates: 0, lastSeq: 3 });
+    await expect(again.json()).resolves.toEqual({ accepted: 0, duplicates: 0, lastSeq: 2 });
   });
 
   it("moves the receiver onto the handed-off task, replacing its old one", async () => {

@@ -185,6 +185,22 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  apps/cmux-adapter:
+    dependencies:
+      '@grokbot-office/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15))
+
   apps/server:
     dependencies:
       '@grokbot-office/shared':
