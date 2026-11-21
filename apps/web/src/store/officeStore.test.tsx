@@ -99,6 +99,7 @@ function resetStore(): void {
     bots: {},
     openHandoffs: [],
     lastEventSeq: 0,
+    snapshotSeq: 0,
     events: [],
     handoffFlash: null,
     selectedBotId: null,
@@ -151,7 +152,20 @@ describe("checkSession", () => {
     expect(state.phase).toBe("ready");
     expect(state.bots.data?.status).toBe("working");
     expect(state.lastEventSeq).toBe(7);
+    expect(state.snapshotSeq).toBe(7);
     expect(invalidateScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the snapshot seq fixed while live events bump lastEventSeq", () => {
+    useOfficeStore.getState().applySnapshot(snapshot);
+    expect(useOfficeStore.getState().snapshotSeq).toBe(7);
+
+    useOfficeStore
+      .getState()
+      .applyEvent(streamEvent(8, { type: "status_changed", status: "reviewing" }));
+
+    expect(useOfficeStore.getState().lastEventSeq).toBe(8);
+    expect(useOfficeStore.getState().snapshotSeq).toBe(7);
   });
 
   it("shows the login form when there is no session", async () => {
@@ -863,7 +877,7 @@ describe("applyEvent", () => {
 });
 
 describe("bot selection", () => {
-  it("selects a bot that is in the snapshot and ignores an absent one", () => {
+  it("selects a bot that is in the snapshot and clears an absent one", () => {
     useOfficeStore.getState().applySnapshot(snapshot);
 
     useOfficeStore.getState().selectBot("data");
@@ -895,5 +909,20 @@ describe("bot selection", () => {
     useOfficeStore.getState().applySnapshot(snapshot);
 
     expect(useOfficeStore.getState().selectedBotId).toBe("data");
+  });
+
+  it("clears the selection on logout and on expiry", async () => {
+    useOfficeStore.getState().applySnapshot(snapshot);
+    useOfficeStore.getState().selectBot("data");
+    useOfficeStore.getState().expire();
+    expect(useOfficeStore.getState().selectedBotId).toBeNull();
+
+    useOfficeStore.getState().applySnapshot(snapshot);
+    useOfficeStore.getState().selectBot("data");
+    fetchMock.mockResolvedValueOnce(emptyResponse(204));
+    await useOfficeStore.getState().logout();
+    const state = useOfficeStore.getState();
+    expect(state.selectedBotId).toBeNull();
+    expect(state.snapshotSeq).toBe(0);
   });
 });

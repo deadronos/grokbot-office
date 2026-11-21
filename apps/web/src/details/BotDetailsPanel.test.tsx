@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import type { BotSnapshot, Handoff, StreamEvent } from "@grokbot-office/shared";
 
-import { BotDetailsView, isCloseKey, panelBot } from "./BotDetailsPanel";
+import {
+  BotDetailsView,
+  focusRestoreTarget,
+  isCloseKey,
+  panelBot,
+  retargetFocus,
+} from "./BotDetailsPanel";
 import { botDetails } from "./botDetails";
 
 const AT = "2026-01-01T00:00:00.000Z";
@@ -49,10 +55,15 @@ function renderPanel(
   openHandoffs: Handoff[] = [],
   events: StreamEvent[] = [],
 ): string {
+  const bots = {
+    [subject.id]: subject,
+    wesley: bot({ id: "wesley", name: "Wesley" }),
+    geordi: bot({ id: "geordi", name: "Geordi" }),
+  };
   return renderToStaticMarkup(
     <BotDetailsView
       bot={subject}
-      details={botDetails(subject, openHandoffs, events)}
+      details={botDetails(subject, openHandoffs, events, bots)}
       onClose={() => {}}
     />,
   );
@@ -123,6 +134,46 @@ describe("BotDetailsView", () => {
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(html).toContain("&lt;b&gt;bold&lt;/b&gt;");
     expect(html).toContain("&lt;b&gt;handoff&lt;/b&gt;");
+  });
+});
+
+/** A stand-in focus target: the helpers only need focus() and isConnected. */
+function target(isConnected = true) {
+  const element = {
+    isConnected,
+    focusCount: 0,
+    focus(): void {
+      element.focusCount += 1;
+    },
+  };
+  return element;
+}
+
+describe("focus restore", () => {
+  it("returns focus to the row that opened the panel", () => {
+    const row = target();
+    const body = target();
+    expect(focusRestoreTarget(row, body)).toBe(row);
+  });
+
+  it("falls back to the body when that row is gone", () => {
+    const body = target();
+    expect(focusRestoreTarget(target(false), body)).toBe(body);
+    expect(focusRestoreTarget(null, body)).toBe(body);
+
+    focusRestoreTarget(target(false), body).focus();
+    expect(body.focusCount).toBe(1);
+  });
+
+  it("retargets the stored row when another bot is chosen in place", () => {
+    const first = target();
+    const second = target();
+    const retargeted = retargetFocus(first, second);
+    expect(retargeted).toBe(second);
+    // Closing after the switch returns to the new row, not the original one.
+    expect(focusRestoreTarget(retargeted, target())).toBe(second);
+    // Nothing held focus at the switch: keep what we had.
+    expect(retargetFocus(first, null)).toBe(first);
   });
 });
 

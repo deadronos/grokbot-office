@@ -11,18 +11,22 @@ export type BotDetails = {
 };
 
 /**
- * Narrows the viewer store's already-filtered handoffs and feed to one bot. Hidden
- * bots are dropped by the store, so this cannot re-introduce one: it only matches
- * the selected bot's own id.
+ * Narrows the viewer store's already-filtered handoffs and feed to one bot. A
+ * handoff stays visible only when both ends are in the snapshot too: a stale
+ * one naming a hidden peer must not leak that id into the panel.
  */
 export function botDetails(
   bot: BotSnapshot,
   openHandoffs: Handoff[],
   events: StreamEvent[],
+  bots: Record<string, BotSnapshot>,
 ): BotDetails {
+  const visible = openHandoffs.filter(
+    (handoff) => bots[handoff.fromBotId] !== undefined && bots[handoff.toBotId] !== undefined,
+  );
   return {
-    handoffsIn: openHandoffs.filter((handoff) => handoff.toBotId === bot.id),
-    handoffsOut: openHandoffs.filter((handoff) => handoff.fromBotId === bot.id),
+    handoffsIn: visible.filter((handoff) => handoff.toBotId === bot.id),
+    handoffsOut: visible.filter((handoff) => handoff.fromBotId === bot.id),
     events: events
       .filter((event) => event.botId === bot.id)
       .toReversed()

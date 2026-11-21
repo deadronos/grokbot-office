@@ -6,6 +6,7 @@ import {
   PACKET_ARC_HEIGHT,
   PACKET_FLIGHT_MS,
   PACKET_PICKUP_MS,
+  consumedSeqAtFirstRun,
   liveSendsFromEvents,
   packetPhase,
   packetPose,
@@ -329,6 +330,58 @@ describe("concurrent packets", () => {
         reducedMotion: true,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("first-run seq seed", () => {
+  it("seeds from the snapshot, so a send before the first run still flies", () => {
+    // The snapshot landed at 5; a send at 6 arrived while the scene chunk loaded,
+    // so `lastEventSeq` is already 6 by the time the hook runs for the first time.
+    const seed = consumedSeqAtFirstRun({
+      consumed: null,
+      snapshotSeq: 5,
+      lastEventSeq: 6,
+      newestEventSeq: 6,
+    });
+    expect(seed).toBe(5);
+
+    const { liveSends } = liveSendsFromEvents({
+      events: [sentEvent(6, "data", "wesley", "h1")],
+      lastConsumedSeq: seed,
+      now: 40,
+      reducedMotion: false,
+    });
+    const packets = syncPackets({
+      previous: [],
+      openHandoffs: [handoff("h1", "data", "wesley")],
+      liveSends,
+      now: 40,
+      reducedMotion: false,
+    });
+    expect(packets[0]?.sentAt).toBe(40);
+  });
+
+  it("keeps the snapshot gap seen when the feed seed arrives after it", () => {
+    // The snapshot's lastEventSeq is past the feed (the seed is still in flight):
+    // its own leftover sends must not fly.
+    const seed = consumedSeqAtFirstRun({
+      consumed: null,
+      snapshotSeq: 9,
+      lastEventSeq: 9,
+      newestEventSeq: 4,
+    });
+    expect(seed).toBe(9);
+  });
+
+  it("keeps the consumed seq once the hook has run", () => {
+    expect(
+      consumedSeqAtFirstRun({
+        consumed: 7,
+        snapshotSeq: 5,
+        lastEventSeq: 7,
+        newestEventSeq: 7,
+      }),
+    ).toBe(7);
   });
 });
 

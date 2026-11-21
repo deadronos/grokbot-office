@@ -179,6 +179,22 @@ export function traySlots(
 }
 
 /**
+ * The seq treated as already seen on the hook's first run. It seeds from the
+ * snapshot, not `lastEventSeq`, which a send during the lazy scene load may
+ * already have bumped past the snapshot. A `lastEventSeq` still ahead of the
+ * feed (its seed arrives after the snapshot) is a gap of already-seen sends.
+ */
+export function consumedSeqAtFirstRun(input: {
+  consumed: number | null;
+  snapshotSeq: number;
+  lastEventSeq: number;
+  newestEventSeq: number;
+}): number {
+  const seed = input.consumed ?? input.snapshotSeq;
+  return input.lastEventSeq > input.newestEventSeq ? input.lastEventSeq : seed;
+}
+
+/**
  * Live `handoff_sent` events newer than `lastConsumedSeq`, keyed by handoff id.
  * Ids come from the events, never from a `{from,to}` flash: a replay batch can
  * carry several sends for one pair, and a snapshot's own sends are not live.
