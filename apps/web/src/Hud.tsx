@@ -1,6 +1,5 @@
 import { DESKS, type BotSnapshot, type StreamEvent } from "@grokbot-office/shared";
 import { useEffect, useState, type CSSProperties } from "react";
-
 import { HUD_LAYOUT, hudVariant, type HudVariant } from "./hudLayout";
 import { useOfficeStore } from "./store/officeStore";
 
@@ -63,8 +62,19 @@ function useHudVariant(): HudVariant {
 export function Hud({ now }: { now: number }) {
   const bots = useOfficeStore((state) => state.bots);
   const events = useOfficeStore((state) => state.events);
+  const selectedBotId = useOfficeStore((state) => state.selectedBotId);
+  const selectBot = useOfficeStore((state) => state.selectBot);
   const variant = useHudVariant();
-  return <HudView bots={bots} events={events} now={now} variant={variant} />;
+  return (
+    <HudView
+      bots={bots}
+      events={events}
+      now={now}
+      variant={variant}
+      selectedBotId={selectedBotId}
+      onSelectBot={selectBot}
+    />
+  );
 }
 
 /** Pure view so the HUD can be rendered without a live store (or a WebGL canvas). */
@@ -73,11 +83,15 @@ export function HudView({
   events,
   now,
   variant = "narrow",
+  selectedBotId = null,
+  onSelectBot,
 }: {
   bots: Record<string, BotSnapshot>;
   events: StreamEvent[];
   now: number;
   variant?: HudVariant;
+  selectedBotId?: string | null;
+  onSelectBot?: (botId: string) => void;
 }) {
   const list = Object.values(bots).toSorted(byDeskThenName);
   const style: CSSProperties =
@@ -101,14 +115,21 @@ export function HudView({
         <h2 className="hud-heading">Bots</h2>
         <ul className="hud-bots">
           {list.map((bot) => (
-            <li key={bot.id} className="hud-bot">
-              <span className={`status-dot status-${bot.status}`} aria-hidden="true" />
-              <span className="hud-name">{bot.name}</span>
-              <span className="hud-status">{bot.status}</span>
-              {bot.label ? <span className="hud-label">{bot.label}</span> : null}
-              <time className="hud-since" dateTime={bot.since}>
-                {formatSince(bot.since, now)}
-              </time>
+            <li key={bot.id}>
+              <button
+                type="button"
+                className="hud-bot"
+                aria-current={bot.id === selectedBotId ? "true" : undefined}
+                onClick={() => onSelectBot?.(bot.id)}
+              >
+                <span className={`status-dot status-${bot.status}`} aria-hidden="true" />
+                <span className="hud-name">{bot.name}</span>
+                <span className="hud-status">{bot.status}</span>
+                {bot.label ? <span className="hud-label">{bot.label}</span> : null}
+                <time className="hud-since" dateTime={bot.since}>
+                  {formatSince(bot.since, now)}
+                </time>
+              </button>
             </li>
           ))}
           {list.length === 0 ? <li className="hud-empty">No bots online.</li> : null}

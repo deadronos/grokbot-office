@@ -101,6 +101,7 @@ function resetStore(): void {
     lastEventSeq: 0,
     events: [],
     handoffFlash: null,
+    selectedBotId: null,
     phase: "checking",
     connection: "reconnecting",
     pending: false,
@@ -858,5 +859,41 @@ describe("applyEvent", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(useOfficeStore.getState().bots).toEqual({});
+  });
+});
+
+describe("bot selection", () => {
+  it("selects a bot that is in the snapshot and ignores an absent one", () => {
+    useOfficeStore.getState().applySnapshot(snapshot);
+
+    useOfficeStore.getState().selectBot("data");
+    expect(useOfficeStore.getState().selectedBotId).toBe("data");
+
+    useOfficeStore.getState().selectBot("quark");
+    expect(useOfficeStore.getState().selectedBotId).toBeNull();
+
+    useOfficeStore.getState().clearSelectedBot();
+    expect(useOfficeStore.getState().selectedBotId).toBeNull();
+  });
+
+  it("drops the selection when its bot leaves the snapshot", () => {
+    useOfficeStore.getState().applySnapshot(snapshot);
+    useOfficeStore.getState().selectBot("data");
+
+    useOfficeStore.getState().applySnapshot({
+      ...snapshot,
+      bots: snapshot.bots.filter((bot) => bot.id !== "data"),
+    });
+
+    expect(useOfficeStore.getState().selectedBotId).toBeNull();
+  });
+
+  it("keeps the selection across a snapshot that still has the bot", () => {
+    useOfficeStore.getState().applySnapshot(snapshot);
+    useOfficeStore.getState().selectBot("data");
+
+    useOfficeStore.getState().applySnapshot(snapshot);
+
+    expect(useOfficeStore.getState().selectedBotId).toBe("data");
   });
 });

@@ -117,6 +117,26 @@ describe("HudView", () => {
     expect(html).toContain("No events yet.");
   });
 
+  it("makes each bot row a keyboard-activatable button", () => {
+    const html = renderToStaticMarkup(
+      <HudView
+        bots={{ data: bot({}), wesley: bot({ id: "wesley", name: "Wesley", status: "idle" }) }}
+        events={[]}
+        now={Date.parse(AT)}
+        selectedBotId="data"
+        onSelectBot={() => {}}
+      />,
+    );
+
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*class="hud-bot"/);
+    expect(html).toMatch(
+      /<button[^>]*class="hud-bot"[^>]*aria-current="true"[^>]*>\s*<span[^>]*>\s*<\/span>\s*<span class="hud-name">Data<\/span>/,
+    );
+    // Only the selected row is marked, and the name stays inside the button.
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1);
+    expect(html).toContain("</button>");
+  });
+
   it("truncates a long label without cutting the status word", () => {
     const html = render({
       data: bot({

@@ -3,6 +3,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { APP_NAME } from "@grokbot-office/shared";
 
 import { Hud } from "./Hud";
+import { BotDetailsPanel } from "./details/BotDetailsPanel";
 import { SessionBar } from "./SessionBar";
 import { LoginScreen } from "./LoginScreen";
 import { useOfficeStore } from "./store/officeStore";
@@ -77,6 +78,7 @@ export function App() {
       <OfficeStage />
       {phase === "ready" ? <SessionBar /> : null}
       {phase === "ready" && now > 0 ? <Hud now={now} /> : null}
+      {phase === "ready" ? <BotDetailsPanel /> : null}
       {phase === "login" ? <LoginScreen /> : null}
     </main>
   );
