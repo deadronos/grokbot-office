@@ -1,7 +1,7 @@
 # grokbot-office
 
 A low-poly 3D office that shows the Grokbot team live: each bot sits at a desk and
-is idle, working, waiting, reviewing or offline, and handoffs are animated as a
+is idle, working, waiting, reviewing, away or offline, and handoffs are animated as a
 packet flying from desk to desk. Bots report in opt-in over small HTTPS calls
 (register, heartbeat, events); the browser receives live updates over SSE.
 
@@ -114,7 +114,8 @@ in the tray, and reduced motion skips the flight and the pickup. When the web ap
 mounts it calls `isWebGlAvailable()` before loading the scene chunk, so a machine
 without WebGL goes straight to the fallback instead of the error boundary. Name
 plates sit high in front of each desk, clear of its screen and every other desk,
-and disappear with an absent or offline bot. The HUD is a right-hand panel on wide
+and disappear with an absent or offline bot; an `away` plate keeps the name and
+adds the last-seen line inside the same texture. The HUD is a right-hand panel on wide
 screens and a short bottom bar below 1280px; both stay off every desk. Top right: a sign-out
 button, plus the connection indicator:
 
@@ -225,16 +226,25 @@ comes from events, so it cannot set `working` or `waiting`. Those two values are
 rejected with `422 {"error":"working/waiting are set by task and handoff events, not heartbeats"}`
 and change nothing (not even `last_heartbeat_at`). It can still report a rest
 state (`idle`, `reviewing`) or `offline`.
-The server sweeps stale heartbeats every 15 seconds. A bot whose last heartbeat is
-older than `timeoutSec` is marked `offline`, its task, label and handoff links are
-cleared, its `since` moves, and the server appends an `offline` event that viewers
-receive over SSE. A bot that is already offline is left alone, and so is a bot with
-no status row (not yet online). A later heartbeat (`idle`, `reviewing`, `offline`, or
-an empty body) or re-register brings an offline bot back to `idle` (or the rest
-status it sent). `since` moves to now and viewers receive a `status_changed` event.
-Already-online bots get no extra event. Hidden bots are updated in the database the
-same way; the existing hidden-bot filter keeps their events off the viewer snapshot
-and stream.
+The server sweeps stale heartbeats every 15 seconds, and presence ages in two steps.
+A bot whose last report is older than `timeoutSec` reads as `away`: the snapshot and
+the SSE refresh say so, the desk stays occupied but dimmed, and the HUD, name plate
+and details panel add a last-seen age. Nothing is written, so the task, label and
+handoff links stay. That rule has no upper bound, so a bot silent for a month still
+reads `away` rather than its stale `working` row; only the sweep ends it. Once the
+silence passes `HEARTBEAT_AWAY_SEC` (default 86400, i.e. one day) the bot is marked
+`offline`: one `offline` event, links cleared, `since` moves. A heartbeat that ends
+an away period asks open viewers to refetch the snapshot, so the label goes at once. A bot that is already offline is left alone (an explicit
+offline is never turned into `away`), and so is a bot with no status row (not yet
+online). Any report — a keep-alive heartbeat (`idle`, `reviewing`, `offline`, or an
+empty body), an event, or a re-register — restores the stored activity, with no
+come-back event when it was only `away`. From an explicit offline, today's
+come-back to `idle` (or the rest status it sent) still runs: `since` moves and
+viewers receive a `status_changed` event; after that the bot can age to `away`
+normally. Already-online bots get no extra event. `away` is derived, never sent:
+a heartbeat or event that tries to set it is rejected. Hidden bots are updated in
+the database the same way; the existing hidden-bot filter keeps their events off
+the viewer snapshot and stream.
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8787/api/bots/data/heartbeat \
@@ -470,6 +480,7 @@ curl -sS http://127.0.0.1:8787/api/state -H "Authorization: Bearer $VIEWER_TOKEN
       "handoffId": "h1",
       "since": "2026-01-01T00:00:00.000Z",
       "lastHeartbeatAt": "2026-01-01T00:00:00.000Z",
+      "lastSeenAt": "2026-01-01T00:00:00.000Z",
       "lastEventSeq": 42
     }
   ],

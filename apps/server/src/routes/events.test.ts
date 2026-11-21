@@ -118,6 +118,13 @@ describe("POST /api/events", () => {
     expect(Date.parse(row?.receivedAt ?? "")).toBeGreaterThanOrEqual(Date.parse(NOW));
   });
 
+  it("refuses a status_changed to away, which only silence can produce", async () => {
+    const { app, dataToken } = setup();
+    const res = await post(app, dataToken, batch(ev(1, "status_changed", { status: "away" })));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "invalid body" });
+  });
+
   it("applies status_changed labels and task_finished results", async () => {
     const { app, repo, dataToken } = setup();
 

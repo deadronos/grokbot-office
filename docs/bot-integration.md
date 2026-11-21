@@ -78,11 +78,35 @@ A heartbeat only keeps the bot alive. **It does not change the bot's status**;
 the office learns what the bot is doing from events. (The one exception is that a
 heartbeat may report a rest state or `offline`.)
 
-Send one every `heartbeatIntervalSec` (default 60). A bot without a heartbeat for
-`timeoutSec` (default 300) is swept offline every 15 seconds: its task, label and
-handoff links are cleared, `since` moves, and viewers see an `offline` event. Both
-numbers come from `HEARTBEAT_INTERVAL_SEC` / `HEARTBEAT_TIMEOUT_SEC` on the
-server, and the timeout must be larger than the interval.
+Send one every `heartbeatIntervalSec` (default 60). The numbers come from
+`HEARTBEAT_INTERVAL_SEC` / `HEARTBEAT_TIMEOUT_SEC` / `HEARTBEAT_AWAY_SEC` on the
+server: the timeout must be larger than the interval, and the away window larger
+than the timeout.
+
+Presence ages in two steps, and the office never stores `away` over what the bot
+was doing:
+
+| Silence                           | Viewers see        | What the server writes                            |
+| --------------------------------- | ------------------ | ------------------------------------------------- |
+| up to `timeoutSec` (300)          | the status         | nothing (the stored activity)                     |
+| past `timeoutSec`                 | `away` + last-seen | nothing: task, label and handoff links stay       |
+| past `HEARTBEAT_AWAY_SEC` (86400) | `offline`          | one `offline` event, links cleared, `since` moves |
+
+The `away` rule has no upper bound: until the 15 s sweeper writes `offline`, a bot
+silent for months still reads `away`, never as the stale activity underneath.
+
+So a quiet bot looks dimmed at its desk rather than gone. Any report — a
+keep-alive heartbeat with no status, an event, or a re-register — restores the
+stored status with no extra event. An explicit `offline` (a heartbeat with
+`status: "offline"`, or a `status_changed` event) is never shown as `away`; it
+stays offline until the bot reports again, and then ages normally. Coming back from
+`away` stores no event, so the server asks open viewers to refetch the snapshot
+instead of making them wait for the next sweep.
+
+Any accepted request is a sign of life, so a batch whose events are all duplicates
+or a repeated `handoff_accepted` still moves the last-seen time. That is deliberate:
+replaying old events on retry keeps a bot out of `away`, which is the safer
+mistake.
 
 ```bash
 bo -X POST "$BO_URL/api/bots/data/heartbeat" \
@@ -93,6 +117,8 @@ bo -X POST "$BO_URL/api/bots/data/heartbeat" \
 ```
 
 The optional `status` is `idle`, `reviewing` or `offline`; an empty body is fine.
+`away` is derived from silence, so the server refuses it with
+`400 {"error":"invalid body"}` — only a real report can bring a bot back.
 `working` and `waiting` come from task and handoff events, so a heartbeat that
 tries to set them answers
 `422 {"error":"working/waiting are set by task and handoff events, not heartbeats"}`

@@ -76,6 +76,8 @@ describe("GET /api/state", () => {
 
   it("reflects the derived status and the event high-water mark", async () => {
     const { app, repo, viewerToken } = setup();
+    // Recent, or the away rule would mask the stored status the test is about.
+    const at = new Date().toISOString();
     repo.applyEvents(
       "data",
       [
@@ -87,7 +89,7 @@ describe("GET /api/state", () => {
           label: "planning",
         },
       ],
-      NOW,
+      at,
     );
 
     const body = StateSnapshot.parse(await (await get(app, viewerToken)).json());
@@ -96,11 +98,41 @@ describe("GET /api/state", () => {
       status: "working",
       taskId: "t1",
       label: "planning",
-      since: NOW,
-      lastHeartbeatAt: NOW,
+      since: at,
+      lastHeartbeatAt: at,
+      lastSeenAt: at,
       lastEventSeq: 1,
     });
     expect(body.lastEventSeq).toBe(1);
+  });
+
+  it("reads a long-silent bot as away until the sweeper writes offline", async () => {
+    const { app, repo, viewerToken } = setup();
+    // A month of silence, so far past the away window that only the sweeper can end it.
+    const quiet = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    repo.setBotStatus({
+      botId: "data",
+      status: "working",
+      label: "issue-7",
+      taskId: "t-1",
+      handoffTo: null,
+      handoffId: null,
+      labelHandoffId: null,
+      since: quiet,
+      lastHeartbeatAt: quiet,
+      lastEventSeq: null,
+    });
+
+    const body = StateSnapshot.parse(await (await get(app, viewerToken)).json());
+    const data = body.bots.find((bot) => bot.id === "data");
+
+    expect(data).toMatchObject({
+      status: "away",
+      label: "issue-7",
+      taskId: "t-1",
+      since: quiet,
+      lastSeenAt: quiet,
+    });
   });
 
   it("lists only handoffs that are still sent, without null optionals", async () => {

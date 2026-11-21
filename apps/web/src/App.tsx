@@ -88,7 +88,7 @@ export function App() {
       {phase === "ready" ? <SessionBar /> : null}
       {phase === "ready" && now > 0 ? <Hud now={now} /> : null}
       {phase === "ready" && historyActive ? <HistoryBar /> : null}
-      {phase === "ready" && !historyActive ? <BotDetailsPanel /> : null}
+      {phase === "ready" && !historyActive ? <BotDetailsPanel now={now} /> : null}
       {phase === "login" ? <LoginScreen /> : null}
     </main>
   );

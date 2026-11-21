@@ -8,6 +8,7 @@ import type { HeartbeatConfig } from "../config.ts";
 import type { Repo } from "../db/repo.ts";
 import type { StreamHub } from "../stream/hub.ts";
 import { nowUtc } from "../time.ts";
+import { readsAsAway } from "./mappers.ts";
 
 /**
  * Bot-facing API. Both routes only trust a bot token bound to the bot being
@@ -61,7 +62,15 @@ export function botRoutes(repo: Repo, heartbeat: HeartbeatConfig, hub: StreamHub
       );
     }
 
-    if (repo.touchHeartbeat(id, parsed.data.status, nowUtc())) hub.notify();
+    const at = nowUtc();
+    // Read before the write: only a bot that was already away needs the snapshot re-asked.
+    const wasAway = readsAsAway(repo.getBotStatus(id), {
+      nowMs: new Date(at).getTime(),
+      timeoutMs: heartbeat.timeoutSec * 1000,
+    });
+    if (repo.touchHeartbeat(id, parsed.data.status, at)) hub.notify();
+    // Coming back from away stores no event, so tell viewers to refetch the snapshot.
+    if (wasAway) hub.refresh();
     return c.body(null, 204);
   });
 

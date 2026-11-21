@@ -1,8 +1,12 @@
 import { z } from "zod/mini";
 
-export const BOT_STATUSES = ["idle", "working", "waiting", "reviewing", "offline"] as const;
+export const BOT_STATUSES = ["idle", "working", "waiting", "reviewing", "away", "offline"] as const;
 export const botStatusSchema = z.enum(BOT_STATUSES);
 export type BotStatus = z.infer<typeof botStatusSchema>;
+
+/** `away` is derived from silence, so a bot may never report it. */
+export const CLIENT_STATUSES = ["idle", "working", "waiting", "reviewing", "offline"] as const;
+export const clientStatusSchema = z.enum(CLIENT_STATUSES);
 
 /** Client-submittable event types; the server-only ones are never accepted from a bot. */
 export const CLIENT_EVENT_TYPES = [

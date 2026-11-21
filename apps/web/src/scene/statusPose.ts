@@ -22,8 +22,12 @@ export type StatusPose = {
   paper: boolean;
 };
 
+/** Away only dims the desk: the bot still sits there, so it reuses the idle pose. */
+const IDLE: StatusPose = { base: "sit", upper: "idle", loop: true, leanBack: 0, paper: false };
+
 const POSES: Record<BotStatus, StatusPose | null> = {
-  idle: { base: "sit", upper: "idle", loop: true, leanBack: 0, paper: false },
+  idle: IDLE,
+  away: IDLE,
   working: { base: "sit", upper: "interact-right", loop: true, leanBack: 0, paper: false },
   waiting: { base: "sit", upper: "idle", loop: true, leanBack: -0.14, paper: false },
   reviewing: { base: "sit", upper: "holding-both", loop: true, leanBack: 0, paper: true },

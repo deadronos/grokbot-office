@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BotSnapshot, StreamEvent } from "@grokbot-office/shared";
 
-import { HudView, describeEvent, formatSince } from "./Hud";
+import { HudView, botStatusLabel, describeEvent, formatSince } from "./Hud";
 
 const AT = "2026-01-01T00:00:00.000Z";
 
@@ -51,6 +51,16 @@ describe("formatSince", () => {
   });
 });
 
+describe("botStatusLabel", () => {
+  it("ages away from the last report, not from the activity", () => {
+    const base = Date.parse(AT);
+    const away = bot({ status: "away", since: AT, lastSeenAt: AT, lastHeartbeatAt: AT });
+
+    expect(botStatusLabel(away, base + 12 * 60_000)).toBe("away · last seen 12m ago");
+    expect(botStatusLabel(bot({ status: "offline" }), base)).toBe("offline");
+  });
+});
+
 describe("describeEvent", () => {
   it("describes every event type as text", () => {
     expect(describeEvent(event(1, { status: "waiting", label: "review" }))).toBe(
@@ -86,6 +96,29 @@ describe("HudView", () => {
     expect(html).toContain("status-reviewing");
     expect(html).toContain("issue-13");
     expect(html).toContain("1m");
+  });
+
+  it("labels an away bot with its last-seen age instead of the activity age", () => {
+    const base = Date.parse(AT);
+    const html = render(
+      {
+        data: bot({
+          status: "away",
+          label: "issue-13",
+          since: "2025-12-31T18:00:00.000Z",
+          lastSeenAt: "2025-12-31T23:48:00.000Z",
+          lastHeartbeatAt: "2025-12-31T23:48:00.000Z",
+        }),
+      },
+      [],
+      base,
+    );
+
+    expect(html).toContain("status-away");
+    expect(html).toContain("away · last seen 12m ago");
+    // The `since` age of six hours must not be what the row shows.
+    expect(html).not.toContain(">6h<");
+    expect(html).toContain("issue-13");
   });
 
   it("shows the newest 20 events first", () => {

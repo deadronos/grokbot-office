@@ -40,6 +40,18 @@ describe("deskVisual", () => {
     expect(visual.pulsing).toBe(false);
   });
 
+  it("dims an away desk but keeps the occupant, with no motion", () => {
+    const visual = deskVisual("away", BOT);
+    expect(visual.occupant).toBe(true);
+    expect(visual.dim).toBeLessThan(1);
+    expect(visual.dim).toBeGreaterThan(deskVisual("offline", BOT).dim);
+    expect(visual.pulsing).toBe(false);
+    expect(visual.thoughtBubble).toBe(false);
+    expect(visual.magnifier).toBe(false);
+    // Calmer than an idle desk, which is neither dimmed nor pulsing.
+    expect(visual.monitorIntensity).toBeLessThan(deskVisual("idle", BOT).monitorIntensity);
+  });
+
   it("treats a bot that is not in the snapshot as idle", () => {
     expect(deskVisual(undefined, BOT)).toEqual(deskVisual("idle", BOT));
   });

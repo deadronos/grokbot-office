@@ -2,6 +2,7 @@ import { z } from "zod/mini";
 
 import {
   botStatusSchema,
+  clientStatusSchema,
   eventTypeSchema,
   handoffStateSchema,
   podSchema,
@@ -94,7 +95,7 @@ export const RegisterBody = z.strictObject({
 export type RegisterBody = z.infer<typeof RegisterBody>;
 
 export const HeartbeatBody = z.strictObject({
-  status: z.optional(botStatusSchema),
+  status: z.optional(clientStatusSchema),
 });
 export type HeartbeatBody = z.infer<typeof HeartbeatBody>;
 
@@ -109,7 +110,7 @@ const eventFields = {
 
 /** A client-submitted event; server-only types and unknown keys are rejected. */
 export const EventIn = z.discriminatedUnion("type", [
-  z.strictObject({ ...eventFields, type: z.literal("status_changed"), status: botStatusSchema }),
+  z.strictObject({ ...eventFields, type: z.literal("status_changed"), status: clientStatusSchema }),
   z.strictObject({ ...eventFields, type: z.literal("task_started") }),
   z.strictObject({ ...eventFields, type: z.literal("task_finished"), result: taskResultSchema }),
   z.strictObject({
@@ -170,6 +171,8 @@ export const BotSnapshot = z.object({
   handoffId: z.optional(HandoffId),
   since: IsoDateTime,
   lastHeartbeatAt: IsoDateTime,
+  /** When the bot last reported; `away` and the HUD age read this. */
+  lastSeenAt: z.optional(IsoDateTime),
   lastEventSeq: z.number().check(z.int(), z.nonnegative()),
 });
 export type BotSnapshot = z.infer<typeof BotSnapshot>;

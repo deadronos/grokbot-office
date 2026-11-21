@@ -1,7 +1,7 @@
 import type { BotSnapshot, Handoff } from "@grokbot-office/shared";
 import { useEffect, useRef } from "react";
 
-import { describeEvent } from "../Hud";
+import { botStatusLabel, describeEvent } from "../Hud";
 import { useOfficeStore, type OfficeStore } from "../store/officeStore";
 import { botDetails, type BotDetails } from "./botDetails";
 
@@ -40,7 +40,7 @@ export function retargetFocus<T extends FocusTarget>(
   return active ?? previous;
 }
 
-export function BotDetailsPanel() {
+export function BotDetailsPanel({ now }: { now: number }) {
   const bot = useOfficeStore(panelBot);
   const bots = useOfficeStore((state) => state.bots);
   const openHandoffs = useOfficeStore((state) => state.openHandoffs);
@@ -52,6 +52,7 @@ export function BotDetailsPanel() {
     <BotDetailsView
       bot={bot}
       details={botDetails(bot, openHandoffs, events, bots)}
+      now={now}
       onClose={clearSelectedBot}
     />
   );
@@ -84,10 +85,13 @@ export function BotDetailsView({
   bot,
   details,
   onClose,
+  now,
 }: {
   bot: BotSnapshot;
   details: BotDetails;
   onClose: () => void;
+  /** Wall clock for the `away` age; injectable so tests do not depend on now. */
+  now: number;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   // Whatever opened the panel; a switch retargets it to the newly chosen row.
@@ -136,7 +140,7 @@ export function BotDetailsView({
         </div>
         <div className="details-fact">
           <dt>Status</dt>
-          <dd>{bot.status}</dd>
+          <dd>{botStatusLabel(bot, now)}</dd>
         </div>
         {bot.label ? (
           <div className="details-fact">

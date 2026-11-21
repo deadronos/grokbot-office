@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_API_BODY_BYTES } from "../app.ts";
 import { issueToken } from "../auth/tokens.ts";
+import type { HeartbeatConfig } from "../config.ts";
 import { botRecord, testSetup } from "../test-utils.ts";
 
 const cleanups: (() => void)[] = [];
@@ -20,7 +21,7 @@ const body = {
 type App = ReturnType<typeof testSetup>["app"];
 const auth = (token: string) => ({ authorization: `Bearer ${token}` });
 
-function setup({ heartbeat }: { heartbeat?: { intervalSec: number; timeoutSec: number } } = {}) {
+function setup({ heartbeat }: { heartbeat?: HeartbeatConfig } = {}) {
   const context = testSetup({ heartbeat });
   cleanups.push(context.close);
   context.repo.upsertBot(botRecord("data"));
@@ -41,6 +42,20 @@ const register = (app: App, token: string, payload: unknown) =>
     headers: { ...auth(token), "content-type": "application/json" },
     body: typeof payload === "string" ? payload : JSON.stringify(payload),
   });
+
+/** A stored status row for `data`; `lastHeartbeatAt` decides whether it reads as away. */
+const statusRow = (lastHeartbeatAt: string) => ({
+  botId: "data",
+  status: "working" as const,
+  label: "issue-7",
+  taskId: "t-1",
+  handoffTo: null,
+  handoffId: null,
+  labelHandoffId: null,
+  since: "2025-12-01T00:00:00.000Z",
+  lastHeartbeatAt,
+  lastEventSeq: null,
+});
 
 const heartbeat = (app: App, id: string, token: string, payload?: unknown) =>
   app.request(`/api/bots/${id}/heartbeat`, {
@@ -107,6 +122,31 @@ describe("POST /api/bots/register", () => {
       )
       .get();
     expect(counts).toEqual({ bots: 2, status: 1 });
+  });
+
+  it("refreshes the snapshot when a heartbeat ends an away period", async () => {
+    const { app, repo, hub, dataToken } = setup();
+    const refresh = vi.spyOn(hub, "refresh");
+    // Long quiet: the row still says working, so viewers are reading it as away.
+    repo.setBotStatus(statusRow("2026-01-01T00:00:00.000Z"));
+    expect(refresh).not.toHaveBeenCalled();
+
+    const res = await heartbeat(app, "data", dataToken);
+
+    expect(res.status).toBe(204);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(repo.getBotStatus("data")?.status).toBe("working");
+  });
+
+  it("does not refresh the snapshot for a bot that was not away", async () => {
+    const { app, repo, hub, dataToken } = setup();
+    const refresh = vi.spyOn(hub, "refresh");
+    repo.setBotStatus(statusRow(new Date().toISOString()));
+
+    const res = await heartbeat(app, "data", dataToken);
+
+    expect(res.status).toBe(204);
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("refreshes the heartbeat on re-register without resetting the status", async () => {
@@ -185,6 +225,13 @@ describe("POST /api/bots/:id/heartbeat", () => {
     const reviewing = repo.getBotStatus("data");
     expect(reviewing?.status).toBe("reviewing");
     expect(reviewing?.since).toBe(reviewing?.lastHeartbeatAt);
+  });
+
+  it("rejects a heartbeat that claims away, which only silence can produce", async () => {
+    const { app, repo, dataToken } = setup();
+    const res = await heartbeat(app, "data", dataToken, { status: "away" });
+    expect(res.status).toBe(400);
+    expect(repo.getBotStatus("data")?.status).not.toBe("away");
   });
 
   it("rejects working or waiting heartbeats with 422 and does not change status", async () => {

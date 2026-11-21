@@ -17,9 +17,10 @@ afterEach(() => {
   for (const close of cleanups.splice(0)) close();
 });
 
-/** Ten minutes before `NOW`: stale for the default 300 s timeout. */
-const STALE = "2025-12-31T23:50:00.000Z";
+/** Two days before `NOW`: past the 300 s timeout and past the one-day away window. */
+const STALE = "2025-12-30T00:00:00.000Z";
 const timeoutSec = 300;
+const awaySec = 86_400;
 
 const at = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -104,7 +105,7 @@ describe("heartbeat sweeper", () => {
     const { repo, hub } = setup();
     working(repo);
     const notify = vi.spyOn(hub, "notify");
-    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec });
+    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec, awaySec });
 
     await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
 
@@ -138,7 +139,7 @@ describe("heartbeat sweeper", () => {
     const { repo, hub } = setup();
     working(repo, at(-60_000));
     const notify = vi.spyOn(hub, "notify");
-    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec });
+    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec, awaySec });
 
     await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
 
@@ -169,17 +170,26 @@ describe("heartbeat sweeper", () => {
       lastEventSeq: null,
     });
     const notify = vi.spyOn(hub, "notify");
+    const refresh = vi.spyOn(hub, "refresh");
 
-    expect(sweepStaleBots({ repo, hub, timeoutSec })).toBe(0);
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec })).toMatchObject({
+      swept: 0,
+      away: new Set(),
+    });
     expect(offlineEvents(repo)).toEqual([]);
     expect(repo.getBotStatus("data")?.since).toBe(STALE);
     expect(notify).not.toHaveBeenCalled();
+    // An explicit offline is not overwritten with away.
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("only sweeps bots with a status row", () => {
     const { repo, hub } = setup();
     // `wesley` has a bot row but no `bot_status`: not yet online, never invented.
-    expect(sweepStaleBots({ repo, hub, timeoutSec })).toBe(0);
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec })).toMatchObject({
+      swept: 0,
+      away: new Set(),
+    });
     expect(repo.getBotStatus("wesley")).toBeUndefined();
   });
 
@@ -187,7 +197,7 @@ describe("heartbeat sweeper", () => {
     const { app, repo, hub } = setup();
     const viewerToken = issueToken(repo, { kind: "viewer" }).token;
     working(repo);
-    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec });
+    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec, awaySec });
 
     const sse = new Sse(
       await app.request("/api/stream", { headers: { authorization: `Bearer ${viewerToken}` } }),
@@ -205,9 +215,74 @@ describe("heartbeat sweeper", () => {
     stop();
   });
 
+  it("does not write away: a quiet bot keeps its stored activity and links", () => {
+    const { repo, hub } = setup();
+    working(repo, at(-10 * 60_000));
+    const refresh = vi.spyOn(hub, "refresh");
+    const notify = vi.spyOn(hub, "notify");
+
+    const result = sweepStaleBots({ repo, hub, timeoutSec, awaySec });
+
+    expect(result).toEqual({ swept: 0, away: new Set(["data"]) });
+    expect(offlineEvents(repo)).toEqual([]);
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "working",
+      label: "plan",
+      taskId: "t-1",
+      lastHeartbeatAt: at(-10 * 60_000),
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    // The same away set on the next tick is not another refresh.
+    const again = sweepStaleBots({ repo, hub, timeoutSec, awaySec, previousAway: result.away });
+    expect(again.away).toEqual(new Set(["data"]));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts a bot at exactly the timeout inside, and one millisecond past it away", () => {
+    const { repo, hub } = setup();
+    working(repo, at(-timeoutSec * 1000));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec }).away).toEqual(new Set());
+
+    working(repo, at(-timeoutSec * 1000 - 1));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec }).away).toEqual(new Set(["data"]));
+  });
+
+  it("goes offline only past the away window", () => {
+    const { repo, hub } = setup();
+    // The sweeper compares with `<`, so the edge itself is still away, not offline.
+    working(repo, at(-awaySec * 1000));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec })).toEqual({
+      swept: 0,
+      away: new Set(["data"]),
+    });
+
+    working(repo, at(-awaySec * 1000 - 1));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec })).toEqual({
+      swept: 1,
+      away: new Set(),
+    });
+    expect(offlineEvents(repo)).toHaveLength(1);
+    expect(repo.getBotStatus("data")?.status).toBe("offline");
+  });
+
+  it("refreshes open streams once when a bot becomes away", async () => {
+    const { repo, hub } = setup();
+    working(repo, at(-10 * 60_000));
+    const refresh = vi.spyOn(hub, "refresh");
+    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec, awaySec });
+
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it("clears its interval on stop", () => {
     const { repo, hub } = setup();
-    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec });
+    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec, awaySec });
     expect(vi.getTimerCount()).toBe(1);
     stop();
     expect(vi.getTimerCount()).toBe(0);
@@ -222,6 +297,7 @@ async function sweepData(context: ReturnType<typeof setup>) {
     repo: context.repo,
     hub: context.hub,
     timeoutSec,
+    awaySec,
   });
   await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
   expect(context.repo.getBotStatus("data")?.status).toBe("offline");
@@ -255,6 +331,35 @@ describe("coming back online after a sweep", () => {
     expect(notify).toHaveBeenCalled();
     await sse.cancel();
     stop();
+  });
+
+  it("shows away with lastSeenAt, and a heartbeat restores the stored activity", async () => {
+    const context = setup();
+    const { app, repo } = context;
+    const quiet = at(-10 * 60_000);
+    working(repo, quiet);
+    const token = issueToken(repo, { kind: "bot", botId: "data" }).token;
+    const viewerToken = issueToken(repo, { kind: "viewer" }).token;
+
+    expect(await snapshotBot(app, viewerToken, "data")).toMatchObject({
+      status: "away",
+      label: "plan",
+      taskId: "t-1",
+      lastSeenAt: quiet,
+      lastHeartbeatAt: quiet,
+    });
+    // Nothing was written: the row still holds the activity.
+    expect(repo.getBotStatus("data")?.status).toBe("working");
+
+    expect((await heartbeat(app, "data", token)).status).toBe(204);
+    expect(await snapshotBot(app, viewerToken, "data")).toMatchObject({
+      status: "working",
+      label: "plan",
+      lastSeenAt: at(0),
+    });
+    expect(repo.getEventsPage(0, 50).rows.filter((row) => row.type === "status_changed")).toEqual(
+      [],
+    );
   });
 
   it("emits a status_changed event for a heartbeat with status idle after a sweep", async () => {
@@ -494,6 +599,71 @@ describe("retention prune", () => {
     event("2");
     await vi.advanceTimersByTimeAsync(1000);
     expect(repo.getEventsPage(0, 10).rows).toHaveLength(0);
+    stop();
+  });
+
+  it("does not write away: a quiet bot keeps its stored activity and links", () => {
+    const { repo, hub } = setup();
+    working(repo, at(-10 * 60_000));
+    const refresh = vi.spyOn(hub, "refresh");
+    const notify = vi.spyOn(hub, "notify");
+
+    const result = sweepStaleBots({ repo, hub, timeoutSec, awaySec });
+
+    expect(result).toEqual({ swept: 0, away: new Set(["data"]) });
+    expect(offlineEvents(repo)).toEqual([]);
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "working",
+      label: "plan",
+      taskId: "t-1",
+      lastHeartbeatAt: at(-10 * 60_000),
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    // The same away set on the next tick is not another refresh.
+    const again = sweepStaleBots({ repo, hub, timeoutSec, awaySec, previousAway: result.away });
+    expect(again.away).toEqual(new Set(["data"]));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts a bot at exactly the timeout inside, and one millisecond past it away", () => {
+    const { repo, hub } = setup();
+    working(repo, at(-timeoutSec * 1000));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec }).away).toEqual(new Set());
+
+    working(repo, at(-timeoutSec * 1000 - 1));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec }).away).toEqual(new Set(["data"]));
+  });
+
+  it("goes offline only past the away window", () => {
+    const { repo, hub } = setup();
+    // The sweeper compares with `<`, so the edge itself is still away, not offline.
+    working(repo, at(-awaySec * 1000));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec })).toEqual({
+      swept: 0,
+      away: new Set(["data"]),
+    });
+
+    working(repo, at(-awaySec * 1000 - 1));
+    expect(sweepStaleBots({ repo, hub, timeoutSec, awaySec })).toEqual({
+      swept: 1,
+      away: new Set(),
+    });
+    expect(offlineEvents(repo)).toHaveLength(1);
+    expect(repo.getBotStatus("data")?.status).toBe("offline");
+  });
+
+  it("refreshes open streams once when a bot becomes away", async () => {
+    const { repo, hub } = setup();
+    working(repo, at(-10 * 60_000));
+    const refresh = vi.spyOn(hub, "refresh");
+    const stop = startHeartbeatSweeper({ repo, hub, timeoutSec, awaySec });
+
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
     stop();
   });
 
