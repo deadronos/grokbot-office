@@ -69,7 +69,9 @@ Node with `--env-file=...` (see the plist). Node keeps any variable already in t
 process environment and adds the rest from the file. The server also loads a
 repo-root `.env` if one exists, but that loader never overwrites variables that are
 already set, so the file passed on the command line always wins. Keep no `.env` in
-the checkout on the Mac.
+the checkout on the Mac. Because the loader looks for that file at a fixed path, each
+start then logs `No .../.env; copy .env.example to .env to configure it.` — expected
+and harmless here: `--env-file` has already loaded the same settings.
 
 One-off admin commands (`pnpm admin ...`) read the repo-root `.env` only, so point
 `DATABASE_PATH` at the same database explicitly:
@@ -124,7 +126,7 @@ tail -f ~/Library/Logs/grokbot-office/server.log
 The server logs the listening ports on start and the reason for an auth failure
 (never the credential). Startup errors — invalid env values, a relative
 `DATABASE_PATH` in production, a port clash in two-port mode — appear here and the
-job exits immediately, so an empty `GET /api/health` is the first thing to check.
+job exits immediately, so check that `GET /api/health` answers `{"ok":true,"service":...}`.
 
 ### Upgrade
 
@@ -189,11 +191,12 @@ Only do this if you accept a public viewer; the login is still required.
 
 ### HSTS
 
-`HSTS` is off by default. With it off, the server sends
-`Strict-Transport-Security: max-age=31536000` only when the request already looks like
-HTTPS: an `https` `Origin`/`Referer`, or `X-Forwarded-Proto: https`. A typed HTTPS URL
-does not provide that hint, so a fresh browser may get no HSTS header until it sends
-one. Behind Funnel/Serve, set `HSTS=true` (or `1`) — the deployment is always HTTPS
+`HSTS` is off by default. With it off, the viewer surface (and the single-port app)
+sends `Strict-Transport-Security: max-age=31536000` only when the request already looks
+like HTTPS: an `https` `Origin`/`Referer`, or `X-Forwarded-Proto: https`. The
+Funnel-facing bot port never sends it on a hint, only with `HSTS` enabled. A typed
+HTTPS URL does not provide that hint, so a fresh browser may get no HSTS header until
+it sends one. Behind Funnel/Serve, set `HSTS=true` (or `1`) — the deployment is always HTTPS
 from the client's point of view, and every response then carries the header on every
 surface, including the Funnel-facing bot port. An unparseable value stops the server at
 startup.
@@ -294,7 +297,18 @@ For a cold copy, stop the agent first, then copy `bot-office.db`, `bot-office.db
 and `bot-office.db-shm` together. The server checkpoints the WAL on `SIGTERM`, so a
 clean `launchctl bootout` normally leaves just the `.db` file.
 
-Restore: stop the agent, put the backup file at `DATABASE_PATH`, start the agent.
+Restore, in this order:
+
+1. `launchctl bootout gui/$(id -u)/com.example.grokbot-office` — never replace the
+   database under a running server.
+2. Move aside the old `bot-office.db-wal` and `bot-office.db-shm` next to
+   `DATABASE_PATH`. A leftover WAL from the previous file would be replayed into the
+   restored database and corrupt it.
+3. Put the backup at `DATABASE_PATH` (an online `.backup` copy is self-contained, so
+   its `.db` is enough). Restoring a cold copy means restoring all three files —
+   `.db`, `-wal`, `-shm` — together, from the same moment.
+4. `launchctl kickstart -k gui/$(id -u)/com.example.grokbot-office`.
+
 Migrations from the running build are applied on start, so a backup older than the
 current schema is upgraded in place; a backup from a newer build may not open. Copy a
 backup off the machine (Time Machine, another disk, a private location), and remember
