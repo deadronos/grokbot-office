@@ -685,7 +685,9 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
             handoffTo: status.handoffTo,
             handoffId: status.handoffId,
             since: status.since,
-            // Any batch counts as a heartbeat, even one that was entirely duplicates.
+            // Any batch counts as a heartbeat, even one that was entirely duplicates or
+            // a repeated accept: a request reached us, so the bot is alive. Accepted
+            // shortcut: a client that replays old events keeps itself out of `away`.
             lastHeartbeatAt: now,
             lastEventSeq: lastSeq ?? null,
           })

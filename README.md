@@ -227,12 +227,14 @@ rejected with `422 {"error":"working/waiting are set by task and handoff events,
 and change nothing (not even `last_heartbeat_at`). It can still report a rest
 state (`idle`, `reviewing`) or `offline`.
 The server sweeps stale heartbeats every 15 seconds, and presence ages in two steps.
-A bot whose last report is older than `timeoutSec` yet inside `HEARTBEAT_AWAY_SEC`
-(default 86400, i.e. one day) reads as `away`: the snapshot and the SSE refresh say
-so, the desk stays occupied but dimmed, and the HUD, name plate and details panel add
-a last-seen age. Nothing is written, so the task, label and handoff links stay.
-A bot silent past the away window is marked `offline`: one `offline` event, links
-cleared, `since` moves. A bot that is already offline is left alone (an explicit
+A bot whose last report is older than `timeoutSec` reads as `away`: the snapshot and
+the SSE refresh say so, the desk stays occupied but dimmed, and the HUD, name plate
+and details panel add a last-seen age. Nothing is written, so the task, label and
+handoff links stay. That rule has no upper bound, so a bot silent for a month still
+reads `away` rather than its stale `working` row; only the sweep ends it. Once the
+silence passes `HEARTBEAT_AWAY_SEC` (default 86400, i.e. one day) the bot is marked
+`offline`: one `offline` event, links cleared, `since` moves. A heartbeat that ends
+an away period asks open viewers to refetch the snapshot, so the label goes at once. A bot that is already offline is left alone (an explicit
 offline is never turned into `away`), and so is a bot with no status row (not yet
 online). Any report — a keep-alive heartbeat (`idle`, `reviewing`, `offline`, or an
 empty body), an event, or a re-register — restores the stored activity, with no

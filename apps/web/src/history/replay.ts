@@ -20,6 +20,10 @@ export type ReplayState = {
  * At the day's start every known bot is idle: no live label, task or handoff
  * leaks into history. `bot_registered` cannot help here, because registration
  * happened before the day being replayed.
+ *
+ * Replay never derives `away` either: presence aging reads the wall clock and only
+ * the live snapshot applies it, so a quiet stretch in history keeps the last
+ * activity instead of fading every desk that paused.
  */
 export function replayRoster(
   roster: readonly BotSnapshot[],

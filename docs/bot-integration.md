@@ -86,17 +86,27 @@ than the timeout.
 Presence ages in two steps, and the office never stores `away` over what the bot
 was doing:
 
-| Silence                                  | Viewers see        | What the server writes                            |
-| ---------------------------------------- | ------------------ | ------------------------------------------------- |
-| up to `timeoutSec` (300)                 | the status         | nothing (the stored activity)                     |
-| past `timeoutSec`, up to the away window | `away` + last-seen | nothing: task, label and handoff links stay       |
-| past `HEARTBEAT_AWAY_SEC` (86400)        | `offline`          | one `offline` event, links cleared, `since` moves |
+| Silence                           | Viewers see        | What the server writes                            |
+| --------------------------------- | ------------------ | ------------------------------------------------- |
+| up to `timeoutSec` (300)          | the status         | nothing (the stored activity)                     |
+| past `timeoutSec`                 | `away` + last-seen | nothing: task, label and handoff links stay       |
+| past `HEARTBEAT_AWAY_SEC` (86400) | `offline`          | one `offline` event, links cleared, `since` moves |
+
+The `away` rule has no upper bound: until the 15 s sweeper writes `offline`, a bot
+silent for months still reads `away`, never as the stale activity underneath.
 
 So a quiet bot looks dimmed at its desk rather than gone. Any report — a
 keep-alive heartbeat with no status, an event, or a re-register — restores the
 stored status with no extra event. An explicit `offline` (a heartbeat with
 `status: "offline"`, or a `status_changed` event) is never shown as `away`; it
-stays offline until the bot reports again, and then ages normally.
+stays offline until the bot reports again, and then ages normally. Coming back from
+`away` stores no event, so the server asks open viewers to refetch the snapshot
+instead of making them wait for the next sweep.
+
+Any accepted request is a sign of life, so a batch whose events are all duplicates
+or a repeated `handoff_accepted` still moves the last-seen time. That is deliberate:
+replaying old events on retry keeps a bot out of `away`, which is the safer
+mistake.
 
 ```bash
 bo -X POST "$BO_URL/api/bots/data/heartbeat" \

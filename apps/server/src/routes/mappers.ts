@@ -22,10 +22,22 @@ export function compareByLayout(a: { id: string }, b: { id: string }): number {
 }
 
 /**
- * Clock and both silence windows. A bot quiet past `timeoutMs` reads as `away`,
- * without being written; past `awayMs` the sweeper has already written offline.
+ * Clock and silence window. A bot quiet past `timeoutMs` reads as `away`, without
+ * being written; only the sweeper writes `offline`, so `away` lasts until it does.
  */
-export type Presence = { nowMs: number; timeoutMs: number; awayMs: number };
+export type Presence = { nowMs: number; timeoutMs: number };
+
+/**
+ * The away rule, shared with the heartbeat route so a return from away can refresh
+ * the snapshot instead of waiting for the next sweep.
+ */
+export function readsAsAway(
+  status: Pick<Status, "status" | "lastHeartbeatAt"> | undefined,
+  presence: Presence,
+): boolean {
+  if (status === undefined || status.status === "offline") return false;
+  return presence.nowMs - new Date(status.lastHeartbeatAt).getTime() > presence.timeoutMs;
+}
 
 export function toBotSnapshot(
   bot: Bot,
@@ -34,15 +46,11 @@ export function toBotSnapshot(
 ): BotSnapshot {
   const desk = getDesk(bot.id);
   const lastSeenAt = status?.lastHeartbeatAt ?? bot.createdAt;
+  // `away` is derived here, never stored, so the activity underneath survives. No
+  // upper bound: a bot silent for a month still reads as away, never as `working`,
+  // until the sweeper writes `offline`.
   const stored = status?.status ?? "offline";
-  // `away` is derived here, never stored: the activity underneath survives. It only
-  // covers the away window; older silence is the sweeper's offline event.
-  const age = presence === undefined ? 0 : presence.nowMs - new Date(lastSeenAt).getTime();
-  const away =
-    presence !== undefined &&
-    stored !== "offline" &&
-    age > presence.timeoutMs &&
-    age <= presence.awayMs;
+  const away = presence !== undefined && readsAsAway(status, presence);
   return {
     id: bot.id,
     name: bot.name,

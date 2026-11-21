@@ -211,7 +211,6 @@ export function createApp({
       adminToken,
       policy: session,
       timeoutSec: heartbeat.timeoutSec,
-      awaySec: heartbeat.awaySec,
     }),
   );
   app.route(
