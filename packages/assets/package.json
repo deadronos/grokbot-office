@@ -1,0 +1,19 @@
+{
+  "name": "@grokbot-office/assets",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:assets": "node src/build.mjs",
+    "test": "vitest run",
+    "fixture": "node scripts/make-fixture.mjs"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "meshoptimizer": "^1.3.0",
+    "sharp": "^0.35.5",
+    "vitest": "^5.1.0"
+  }
+}

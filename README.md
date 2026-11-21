@@ -27,6 +27,7 @@ details panel remain later issues.
 apps/server        Hono API (GET /api/health), testable app module + boot entry
 apps/web           Vite + React Three Fiber office scene
 packages/shared    Constants and types shared by server and web
+packages/assets    Reprocessable glTF asset pipeline (dev tooling)
 .github/workflows  CI
 ```
 
@@ -130,6 +131,7 @@ login form.
 | `pnpm typecheck`    | `tsc` for every package           |
 | `pnpm test`         | Vitest for every package          |
 | `pnpm admin ...`    | Admin token CLI (see below)       |
+| `pnpm assets:build` | Rebuild committed 3D assets       |
 
 ## Database
 
@@ -587,6 +589,13 @@ that the answer is `503 {"error":"too many streams"}`.
 every push to `main` and every pull request. A single aggregator job named `CI`
 depends on all of them and is the one required check. Actions are pinned by
 commit SHA; Dependabot keeps npm and GitHub Actions dependencies up to date.
+
+## Assets
+
+3D models are CC0 Kenney packs, processed with glTF-Transform and committed under
+`apps/web/public/assets/models/`. Origins, licences and the reproducible build are
+documented in [assets/LICENSES.md](./assets/LICENSES.md) and
+[assets/README.md](./assets/README.md).
 
 ## License
 

@@ -154,3 +154,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Asset pipeline download cache (source packs)
+assets/cache/
