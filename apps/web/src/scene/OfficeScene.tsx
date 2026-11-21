@@ -14,6 +14,8 @@ import {
   type DeskStation,
   type Placement,
 } from "./deskStations";
+import { HandoffPackets, useHandoffPackets } from "./HandoffPacketLayer";
+import { packetsAnimating } from "./handoffPackets";
 import { setSceneInvalidator } from "./invalidateScene";
 import { ModelBoundary } from "./ModelBoundary";
 import { FurnitureModels } from "./models";
@@ -24,7 +26,6 @@ import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 const ROOM = { width: 12.5, depth: 10.5, wallHeight: 3.2, wall: 0.2 };
 const BACKGROUND = "#141821";
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const HANDOFF_FLASH_MS = 1_200;
 
 // Static furniture placements, so their instance matrices are built exactly once.
 const DESK_BODIES = DESK_STATIONS.map((station) => station.deskBody);
@@ -284,46 +285,6 @@ function DeskVitals() {
   );
 }
 
-/** A short line from the sender's desk to the receiver's when a handoff is sent. */
-function HandoffFlash() {
-  const flash = useOfficeStore((state) => state.handoffFlash);
-  const clear = useOfficeStore((state) => state.clearHandoffFlash);
-
-  useEffect(() => {
-    if (!flash) return;
-    const timer = setTimeout(clear, HANDOFF_FLASH_MS);
-    return () => clearTimeout(timer);
-  }, [flash, clear]);
-
-  const geometry = useMemo(() => {
-    if (!flash) return undefined;
-    const from = DESK_STATIONS.find((station) => station.desk.botId === flash.from);
-    const to = DESK_STATIONS.find((station) => station.desk.botId === flash.to);
-    if (!from || !to) return undefined;
-    const start = new THREE.Vector3(...from.bot.position).add(new THREE.Vector3(0, 0.5, 0));
-    const end = new THREE.Vector3(...to.bot.position).add(new THREE.Vector3(0, 0.5, 0));
-    const direction = end.clone().sub(start);
-    return {
-      midpoint: start.clone().add(end).multiplyScalar(0.5),
-      length: direction.length(),
-      quaternion: new THREE.Quaternion().setFromUnitVectors(Y_AXIS, direction.normalize()),
-    };
-  }, [flash]);
-
-  if (!flash || !geometry) return null;
-  return (
-    <mesh position={geometry.midpoint} quaternion={geometry.quaternion}>
-      <cylinderGeometry args={[0.03, 0.03, geometry.length, 6]} />
-      <meshBasicMaterial
-        color={BOT_COLORS[flash.from] ?? "#f4f6fb"}
-        toneMapped={false}
-        transparent
-        opacity={0.9}
-      />
-    </mesh>
-  );
-}
-
 /** Drops the scene to the WebGL fallback when the context is lost. */
 function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
   const gl = useThree((state) => state.gl);
@@ -343,14 +304,16 @@ function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
 export default function OfficeScene({ onContextLost }: { onContextLost?: () => void } = {}) {
   const bots = useOfficeStore((state) => state.bots);
   const reducedMotion = usePrefersReducedMotion();
-  // Only pay for a continuous loop while a character is on screen and moving.
+  const { packets, settle } = useHandoffPackets(reducedMotion);
+  // Only pay for a continuous loop while a character or a packet is moving.
   const continuous = useMemo(
     () =>
       shouldRenderContinuously({
         statuses: DESK_STATIONS.map((station) => bots[station.desk.botId]?.status),
         reducedMotion,
+        packetAnimating: packetsAnimating(packets),
       }),
-    [bots, reducedMotion],
+    [bots, reducedMotion, packets],
   );
 
   return (
@@ -378,7 +341,7 @@ export default function OfficeScene({ onContextLost }: { onContextLost?: () => v
       </ModelBoundary>
       <DeskVitals />
       <Characters reducedMotion={reducedMotion} />
-      <HandoffFlash />
+      <HandoffPackets packets={packets} settle={settle} reducedMotion={reducedMotion} />
       <OrbitControls
         enableDamping={false}
         enablePan={false}

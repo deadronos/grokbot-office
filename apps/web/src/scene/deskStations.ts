@@ -15,6 +15,8 @@ export type DeskStation = {
   chairBack: Placement;
   bot: Placement;
   namePlate: Placement;
+  tray: Placement;
+  packetLaunch: Placement;
 };
 
 /** Desk-local (x, z) to world, rotated by the desk facing around its own position. */
@@ -33,6 +35,9 @@ export const NAME_PLATE_SIZE: readonly [number, number] = [1.2, 0.28];
 /** Chair seat top of the committed `chairDesk.glb` at `MODEL_SCALE`. */
 export const SEAT_TOP = 0.418;
 
+/** Tray floor: where a landed packet's base sits, just above the worktop (`DESK_TOP` 0.845). */
+export const TRAY_TOP = 0.9;
+
 /** One station per fixed desk: the desk faces the centre, the bot sits behind it. */
 export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   desk,
@@ -47,6 +52,13 @@ export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   // High above the desk front, clear of its screen and every other desk
   // (see the projected coverage check in deskStations.test.ts).
   namePlate: place(desk, 0, 3.6, 0.9),
+  // Inbox tray on the empty front-left corner of the worktop, clear of the
+  // monitor (right of centre) and the keyboard; packets land here and the
+  // open-handoff count floats above it.
+  tray: place(desk, -0.58, TRAY_TOP, 0.3),
+  // A packet lifts off the sender's worktop right of the screen, clear of both
+  // the character seated behind the desk and the name plate overhead.
+  packetLaunch: place(desk, 0.68, 1.12, -0.05),
 }));
 
 /** An absent or offline bot has no character, so it gets no floating label either. */
