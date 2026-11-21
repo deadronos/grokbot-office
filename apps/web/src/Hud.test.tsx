@@ -150,3 +150,12 @@ describe("HudView", () => {
     expect(html).not.toContain("bot_hidden");
   });
 });
+
+describe("asset credit", () => {
+  it("credits Kenney CC0 with a link", () => {
+    const html = render({});
+    expect(html).toContain("Models:");
+    expect(html).toContain("CC0");
+    expect(html).toMatch(/href="https:\/\/kenney\.nl"/);
+  });
+});

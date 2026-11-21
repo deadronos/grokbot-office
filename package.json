@@ -12,7 +12,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "admin": "pnpm --filter @grokbot-office/server admin --",
-    "assets:build": "pnpm --filter @grokbot-office/assets build:assets"
+    "assets:build": "pnpm --filter @grokbot-office/assets build:assets",
+    "assets:hash": "pnpm --filter @grokbot-office/assets models:hash"
   },
   "devDependencies": {
     "oxfmt": "^0.78.0",

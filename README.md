@@ -398,8 +398,11 @@ Funnel-facing bot port, with no hint required. Unset or `false` keeps the hint-b
 behaviour above; an unparseable value stops the server at startup.
 `/api` responses add a closed CSP (`default-src 'none'; frame-ancestors
 'none'; base-uri 'none'`); the web app is served with a CSP that allows only same-origin
-scripts and styles, with no `unsafe-eval` (`style-src` keeps `'unsafe-inline'` for React's
-style attributes), and `frame-ancestors 'none'`, so the viewer cannot be framed either.
+scripts and styles, with no `unsafe-eval` — `script-src` adds just `'wasm-unsafe-eval'` for
+the meshopt model decoder, which instantiates WebAssembly, and `img-src`/`connect-src` add
+`blob:` for the textures embedded in the `.glb` models (`style-src` keeps `'unsafe-inline'`
+for React's style attributes) — and `frame-ancestors 'none'`, so the viewer cannot be
+framed either.
 Unknown `/api/*` paths always return `404 {"error":"not found"}`, never the SPA
 `index.html`.
 

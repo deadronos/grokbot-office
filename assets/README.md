@@ -33,3 +33,37 @@ drei's `useGLTF(url, true)` followed by
 `gltfLoader.setMeshoptDecoder(MeshoptDecoder)`. The character
 (`character-worker.glb`) keeps its Kenney humanoid rig and all animation clips;
 see `LICENSES.md` for the clip names and the gaps (no typing/reading clips).
+
+## Hash record
+
+`packages/assets/models.sha256.json` pins the SHA-256 of each committed `.glb`.
+`packages/assets/test/models.test.mjs` hashes the files offline and fails on
+drift, a missing file or a stray one. After an intentional rebuild, refresh the
+record and commit it with the models:
+
+```sh
+pnpm assets:build
+pnpm assets:hash
+```
+
+## Runtime use (#17)
+
+The web scene loads the models at runtime with drei's `useGLTF(url, false, true)`
+(third argument enables the meshopt decoder). URLs live in
+`apps/web/src/scene/modelUrls.ts`. Furniture is cloned per desk; the character
+uses `SkeletonUtils.clone` for its own skeleton and `AnimationMixer`.
+
+Status -> animation, given the rig gaps above:
+
+| status    | base  | upper body       | extra                               |
+| --------- | ----- | ---------------- | ----------------------------------- |
+| idle      | `sit` | `idle`           | -                                   |
+| working   | `sit` | `interact-right` | monitor flicker                     |
+| waiting   | `sit` | `idle`           | lean-back rotation + thought bubble |
+| reviewing | `sit` | `holding-both`   | paper prop                          |
+| offline   | -     | -                | character hidden                    |
+
+`apps/web/src/scene/statusPose.ts` merges the base and upper-body tracks into one
+clip, so the legs stay seated while the upper body plays; a crossfade therefore
+never shows a standing pose. The mapping is unit-tested against the actual clip
+list in the committed GLB.

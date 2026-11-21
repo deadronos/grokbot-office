@@ -30,9 +30,11 @@ export type Surface = "all" | "bot" | "viewer";
  * forbid everything; the viewer web app needs its own scripts, styles and SSE connection.
  */
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+// `wasm-unsafe-eval` is needed by meshopt's decoder (it does not enable JS eval); the
+// `blob:` sources let GLTFLoader read the textures embedded in our .glb files.
 export const WEB_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data:; font-src 'self'; connect-src 'self'; " +
+  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob:; " +
   "frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 const BASE_SECURITY_HEADERS: Record<string, string> = {

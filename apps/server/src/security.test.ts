@@ -55,6 +55,11 @@ function sessionCookieHeader(res: Response): string {
   return raw.split(";")[0];
 }
 
+const directive = (name: string) =>
+  WEB_CSP.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name} `)) ?? "";
+
 describe("security headers", () => {
   it("hardens every API response and forbids everything in its CSP", async () => {
     const { app, close } = testSetup();
@@ -86,7 +91,30 @@ describe("security headers", () => {
     const res = await app.request("/");
 
     expect(res.headers.get("content-security-policy")).toBe(WEB_CSP);
-    expect(WEB_CSP).not.toContain("unsafe-eval");
+    expect(WEB_CSP).not.toContain("'unsafe-eval'");
+  });
+
+  it("allows WebAssembly in the viewer without opening script-src further", () => {
+    // meshopt's decoder is WebAssembly: browsers refuse it without wasm-unsafe-eval.
+    const scriptSrc = directive("script-src");
+    expect(scriptSrc).toBe("script-src 'self' 'wasm-unsafe-eval'");
+    expect(scriptSrc).not.toContain("'unsafe-eval'");
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+  });
+
+  it("lets the viewer load GLB textures, which arrive as blob: URLs", () => {
+    expect(directive("img-src")).toContain("blob:");
+    expect(directive("connect-src")).toContain("blob:");
+  });
+
+  it("keeps the API policy free of blob:", async () => {
+    const { app, close } = testSetup();
+    cleanups.push(close);
+
+    const res = await app.request("/api/state");
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toBe("default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+    expect(csp).not.toContain("blob:");
   });
 });
 

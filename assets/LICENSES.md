@@ -36,10 +36,10 @@ anyway so the provenance stays auditable.
   `wheelchair-look-left`, `wheelchair-look-right`, `wheelchair-move-forward`,
   `wheelchair-move-back`, `wheelchair-move-left`, `wheelchair-move-right`.
 - Gaps for #17: the pack has no dedicated typing, reading or leaning-back clip.
-  Closest mappings: sitting idle loop = `sit`; working/typing = `interact-right`
-  or `interact-left`; reviewing/reading = `holding-right`/`holding-left` plus
-  `idle`; waiting = `idle` or `emote-yes`/`emote-no`. Variants are colour
-  swaps of the one processed character.
+  Closest mappings: seated base = `sit` (owns the legs), working/typing =
+  `interact-right` on top of it, reviewing/reading = `holding-both` (plus a
+  paper prop), waiting = `idle` plus a small lean-back rotation. Variants are the
+  one processed character tinted with `BOT_COLORS` plus a primitive accessory.
 
 ## Processed outputs
 

@@ -302,3 +302,13 @@ canvas {
 .status-offline {
   background: #5a616e;
 }
+
+.hud-credit {
+  font-size: 0.68rem;
+  opacity: 0.55;
+  pointer-events: auto;
+}
+
+.hud-credit a {
+  color: inherit;
+}

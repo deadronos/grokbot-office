@@ -30,15 +30,20 @@ function place(desk: Desk, localX: number, localY: number, localZ: number): Plac
 /** Plate size in world units; kept small so it cannot cover the desk in front. */
 export const NAME_PLATE_SIZE: readonly [number, number] = [1.2, 0.28];
 
+/** Chair seat top of the committed `chairDesk.glb` at `MODEL_SCALE`. */
+export const SEAT_TOP = 0.418;
+
 /** One station per fixed desk: the desk faces the centre, the bot sits behind it. */
 export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   desk,
   deskBody: place(desk, 0, 0.37, 0),
-  screen: place(desk, 0, 1.1, 0.2),
+  // Centre of the `computerScreen.glb` panel: the status overlay sits on it.
+  screen: place(desk, 0, 1.222, 0.2),
   screenStand: place(desk, 0, 0.9, 0.2),
   chairSeat: place(desk, 0, 0.48, -0.75),
   chairBack: place(desk, 0, 0.7, -1),
-  bot: place(desk, 0, 0.75, -0.75),
+  // The character rig's origin is the seat surface in its `sit` pose.
+  bot: place(desk, 0, SEAT_TOP, -0.75),
   // High above the chair, clear of the desk in front (see deskStations.test.ts).
   namePlate: place(desk, 0, 3.05, -0.75),
 }));
