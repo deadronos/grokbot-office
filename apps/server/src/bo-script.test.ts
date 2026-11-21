@@ -66,6 +66,8 @@ describe("scripts/bo.sh", () => {
       timeoutSec: 300,
     });
     expect(context.repo.getBot("data")).toMatchObject({ name: "data", pod: "dev" });
+    // Loopback + http is the normal local setup; no warning noise on stderr.
+    expect(registered.stderr).toBe("");
 
     await bo(url, "data", dataToken, "start", "docs", "task-1");
     expect(context.repo.getBotStatus("data")).toMatchObject({
@@ -109,6 +111,52 @@ describe("scripts/bo.sh", () => {
 
     await bo(url, "data", dataToken, "event", '{"type":"status_changed","status":"idle"}');
     expect(context.repo.getBotStatus("data")).toMatchObject({ status: "idle" });
+  });
+
+  it("escapes quotes, backslashes and control characters in labels", async () => {
+    const context = testSetup();
+    cleanups.push(context.close);
+    context.repo.upsertBot(botRecord("data"));
+    const token = issueToken(context.repo, { kind: "bot", botId: "data" }).token;
+    const url = await listen(context);
+    await bo(url, "data", token, "register");
+
+    const label = 'he said "hi" C:\\tmp\ttab';
+    const started = await bo(url, "data", token, "start", label);
+    // Valid JSON out; the server stores it after its own whitespace sanitizing.
+    expect(JSON.parse(started.stdout)).toBeTruthy();
+    expect(context.repo.getBotStatus("data")).toMatchObject({
+      label: 'he said "hi" C:\\tmp tab',
+    });
+  });
+
+  it("refuses a raw event that tries to set the envelope ids", async () => {
+    const context = testSetup();
+    cleanups.push(context.close);
+    context.repo.upsertBot(botRecord("data"));
+    const token = issueToken(context.repo, { kind: "bot", botId: "data" }).token;
+    const url = await listen(context);
+
+    for (const raw of [
+      '{"type":"status_changed","botId":"wesley"}',
+      '{"type":"status_changed","eventId":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}',
+    ]) {
+      const { code, stderr } = await failureOf(bo(url, "data", token, "event", raw));
+      expect(code).toBe(1);
+      expect(stderr).toContain("must not set botId or eventId");
+    }
+  });
+
+  it("warns before sending the token over plain http to a non-loopback host", async () => {
+    const context = testSetup();
+    cleanups.push(context.close);
+    context.repo.upsertBot(botRecord("data"));
+    const token = issueToken(context.repo, { kind: "bot", botId: "data" }).token;
+
+    // Port 1 refuses at once, so this stays offline and fast.
+    const { code, stderr } = await failureOf(bo("http://0.0.0.0:1", "data", token, "heartbeat"));
+    expect(code).toBe(1);
+    expect(stderr).toContain("plain http");
   });
 
   it("refuses working/waiting heartbeats before they reach the server", async () => {

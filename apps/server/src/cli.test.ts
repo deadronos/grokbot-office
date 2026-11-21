@@ -5,7 +5,15 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isEntryModule, main, tokenCreate, tokenList, tokenRevoke, runCli } from "./cli.ts";
+import {
+  botCreate,
+  isEntryModule,
+  main,
+  runCli,
+  tokenCreate,
+  tokenList,
+  tokenRevoke,
+} from "./cli.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
 import { botRecord, testSetup } from "./test-utils.ts";
@@ -23,6 +31,8 @@ function setup() {
   context.repo.upsertBot(botRecord("data"));
   return context;
 }
+
+const noop = () => undefined;
 
 function captureRepo() {
   const lines: string[] = [];
@@ -45,6 +55,83 @@ describe("admin CLI commands", () => {
     expect(stored.kind).toBe("bot");
     expect(stored.prefix).toBe(token!.slice(0, 8));
     expect(stored.hash).not.toBe(token);
+  });
+
+  it("creates a bot from the fixed layout, then issues its first token", () => {
+    const { repo } = setup();
+    const { lines, out } = captureRepo();
+    botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--desk", "0"], out);
+
+    expect(repo.getBot("lumi")).toMatchObject({
+      id: "lumi",
+      name: "Lumi",
+      pod: "command",
+      role: "bot",
+      avatar: "robot",
+      hidden: false,
+    });
+    expect(lines[0]).toContain('Created bot "lumi"');
+    expect(lines[1]).toContain("token create --kind bot --bot lumi");
+    expect(() =>
+      tokenCreate(repo, ["--kind", "bot", "--bot", "lumi"], () => undefined),
+    ).not.toThrow();
+  });
+
+  it("rejects ids, names, desks and pods the layout cannot hold", () => {
+    const { repo } = setup();
+    expect(() => botCreate(repo, ["--name", "Nobody"], noop)).toThrow(/--id/);
+    expect(() => botCreate(repo, ["--id", "Data", "--name", "Data"], noop)).toThrow(/--id/);
+    expect(() => botCreate(repo, ["--id", "lumi"], noop)).toThrow(/--name/);
+    expect(() => botCreate(repo, ["--id", "data", "--name", "Data"], noop)).toThrow(
+      /already exists/,
+    );
+
+    // The desk index must be the bot's own desk in its pod.
+    expect(() => botCreate(repo, ["--id", "wesley", "--name", "W", "--desk", "0"], noop)).toThrow(
+      /index 1/,
+    );
+    expect(() => botCreate(repo, ["--id", "spock", "--name", "S", "--desk", "x"], noop)).toThrow(
+      /index 3/,
+    );
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "L", "--pod", "ops"], noop)).toThrow(
+      /pod command/,
+    );
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "L", "--pod", "sales"], noop)).toThrow(
+      /--pod/,
+    );
+  });
+
+  it("rejects a flag whose value is missing or another flag", () => {
+    const { repo } = setup();
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "--desk", "0"], noop)).toThrow(
+      /--name needs a value/,
+    );
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--role"], noop)).toThrow(
+      /--role needs a value/,
+    );
+    expect(() => botCreate(repo, ["--id", "lumi", "--name"], noop)).toThrow(/--name needs a value/);
+  });
+
+  it("applies the register limits to name, role and avatar", () => {
+    const { repo } = setup();
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "x".repeat(41)], noop)).toThrow(
+      /--name .*40/,
+    );
+    expect(() =>
+      botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--role", "r".repeat(61)], noop),
+    ).toThrow(/--role .*60/);
+    expect(() =>
+      botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--avatar", "a".repeat(61)], noop),
+    ).toThrow(/--avatar .*60/);
+  });
+
+  it("keeps bots outside the layout HUD-only in the requested pod", () => {
+    const { repo } = setup();
+    botCreate(repo, ["--id", "scribe", "--name", "Scribe", "--pod", "ops"], () => undefined);
+    expect(repo.getBot("scribe")).toMatchObject({ pod: "ops" });
+    expect(() =>
+      botCreate(repo, ["--id", "ghost", "--name", "Ghost", "--desk", "0"], () => undefined),
+    ).toThrow(/no desk/);
   });
 
   it("creates viewer tokens and validates arguments", () => {
@@ -98,6 +185,7 @@ describe("admin CLI commands", () => {
     expect(() => runCli(repo, ["token", "list"], out)).not.toThrow();
     expect(() => runCli(repo, ["token", "wat"], out)).toThrow(/usage/);
     expect(() => runCli(repo, ["bots"], out)).toThrow(/usage/);
+    expect(() => runCli(repo, ["bot", "wat"], out)).toThrow(/usage/);
   });
 });
 

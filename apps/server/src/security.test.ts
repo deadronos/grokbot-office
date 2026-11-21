@@ -21,7 +21,9 @@ afterEach(() => {
 });
 
 /** An app whose rate-limit clock the test moves by hand. */
-function rateLimitedApp(config = { perMin: 60, burst: 2, ipPerMin: 60, ipBurst: 2 }) {
+function rateLimitedApp(
+  config = { perMin: 60, burst: 2, ipPerMin: 60, ipBurst: 2, cookieFailurePerMin: 600 },
+) {
   const db = openDatabase(":memory:");
   const repo = createSqliteRepo(db);
   const hub = createStreamHub();
@@ -128,7 +130,13 @@ describe("CORS", () => {
 
 describe("rate limits", () => {
   it("leaves /api/health alone", async () => {
-    const { app } = rateLimitedApp({ perMin: 1, burst: 1, ipPerMin: 60, ipBurst: 1 });
+    const { app } = rateLimitedApp({
+      perMin: 1,
+      burst: 1,
+      ipPerMin: 60,
+      ipBurst: 1,
+      cookieFailurePerMin: 600,
+    });
     for (let index = 0; index < 5; index += 1) {
       expect((await app.request(HEALTH_PATH)).status).toBe(200);
     }
@@ -262,8 +270,60 @@ describe("rate limits", () => {
     ).toBe(true);
   });
 
+  it("ceils garbage-cookie failures per IP without hashing them forever", async () => {
+    const { app, clock } = rateLimitedApp({
+      perMin: 60,
+      burst: 2,
+      ipPerMin: 60,
+      ipBurst: 2,
+      cookieFailurePerMin: 2,
+    });
+    const garbage = () =>
+      app.request("/api/state", {
+        headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
+      });
+
+    // Two failures fit the ceiling; the third answers 429 and is cleared again.
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(401);
+    const limited = await garbage();
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+
+    // Two per minute: half a minute later the ceiling has room again.
+    clock.now += 31_000;
+    expect((await garbage()).status).toBe(401);
+  });
+
+  it("still accepts a valid session cookie from an IP whose garbage bucket is spent", async () => {
+    const { app, viewer } = rateLimitedApp({
+      perMin: 60,
+      burst: 2,
+      ipPerMin: 60,
+      ipBurst: 2,
+      cookieFailurePerMin: 2,
+    });
+    const cookie = sessionCookieHeader(
+      await app.request("/api/session", {
+        method: "POST",
+        headers: { authorization: `Bearer ${viewer.token}` },
+      }),
+    );
+    const garbage = () =>
+      app.request("/api/state", {
+        headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
+      });
+
+    // Every viewer behind Funnel shares one loopback IP, so this flood must not lock
+    // the valid session out.
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(429);
+    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
+  });
+
   it("keeps rate-limit buckets apart per surface", async () => {
-    const config = { perMin: 60, burst: 2, ipPerMin: 60, ipBurst: 2 };
+    const config = { perMin: 60, burst: 2, ipPerMin: 60, ipBurst: 2, cookieFailurePerMin: 600 };
     const db = openDatabase(":memory:");
     const repo = createSqliteRepo(db);
     const hub = createStreamHub();

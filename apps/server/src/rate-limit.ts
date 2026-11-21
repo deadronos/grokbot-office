@@ -64,7 +64,11 @@ export type RateLimits = {
   token: (key: string) => RateLimitDecision;
   ip: (key: string) => RateLimitDecision;
   failedAuth: (key: string) => RateLimitDecision;
+  /** Garbage session cookies, counted (and spent) only after the lookup fails. */
+  cookieFailure: (key: string) => RateLimitDecision;
 };
+
+const cookieKey = (key: string) => `cookie:${key}`;
 
 export function createRateLimits(
   config: RateLimitConfig,
@@ -76,6 +80,8 @@ export function createRateLimits(
     token: (key) => buckets.take(`token:${key}`, config.burst, config.perMin),
     ip: (key) => buckets.take(`ip:${key}`, config.ipBurst, config.ipPerMin),
     failedAuth: (key) => buckets.take(`failed:${key}`, config.ipBurst, config.ipPerMin),
+    cookieFailure: (key) =>
+      buckets.take(cookieKey(key), config.cookieFailurePerMin, config.cookieFailurePerMin),
   };
 }
 
