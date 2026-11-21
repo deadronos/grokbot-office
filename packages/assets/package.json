@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build:assets": "node src/build.mjs",
+    "models:hash": "node scripts/record-model-hashes.mjs",
     "test": "vitest run",
     "fixture": "node scripts/make-fixture.mjs"
   },

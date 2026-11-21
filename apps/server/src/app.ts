@@ -30,8 +30,9 @@ export type Surface = "all" | "bot" | "viewer";
  * forbid everything; the viewer web app needs its own scripts, styles and SSE connection.
  */
 const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+// `wasm-unsafe-eval` is needed by meshopt's decoder; it does not enable JS eval.
 export const WEB_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; font-src 'self'; connect-src 'self'; " +
   "frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 

@@ -96,6 +96,9 @@ export function HudView({
           {events.length === 0 ? <li className="hud-empty">No events yet.</li> : null}
         </ol>
       </section>
+      <footer className="hud-credit">
+        Models: <a href="https://kenney.nl">Kenney</a> (CC0)
+      </footer>
     </aside>
   );
 }

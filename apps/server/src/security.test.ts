@@ -86,7 +86,18 @@ describe("security headers", () => {
     const res = await app.request("/");
 
     expect(res.headers.get("content-security-policy")).toBe(WEB_CSP);
-    expect(WEB_CSP).not.toContain("unsafe-eval");
+    expect(WEB_CSP).not.toContain("'unsafe-eval'");
+  });
+
+  it("allows WebAssembly in the viewer without opening script-src further", () => {
+    const scriptSrc = WEB_CSP.split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("script-src"));
+
+    // meshopt's decoder is WebAssembly: browsers refuse it without wasm-unsafe-eval.
+    expect(scriptSrc).toBe("script-src 'self' 'wasm-unsafe-eval'");
+    expect(scriptSrc).not.toContain("'unsafe-eval'");
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
   });
 });
 

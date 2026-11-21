@@ -1,14 +1,19 @@
 import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import { useOfficeStore } from "../store/officeStore";
 import { BOT_COLORS } from "./botColors";
+import { Characters } from "./Characters";
 import { REVIEW_MONITOR, deskVisual, pulseFactor } from "./deskVisuals";
 import { DESK_STATIONS, NAME_PLATE_SIZE, type DeskStation, type Placement } from "./deskStations";
 import { setSceneInvalidator } from "./invalidateScene";
+import { ModelBoundary } from "./ModelBoundary";
+import { FurnitureModels } from "./models";
+import { shouldRenderContinuously } from "./renderMode";
 import { CAMERA, CANVAS_DPR, FRAMELOOP, ORBIT_LIMITS, SHADOWS } from "./sceneConfig";
+import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 
 const ROOM = { width: 12.5, depth: 10.5, wallHeight: 3.2, wall: 0.2 };
 const BACKGROUND = "#141821";
@@ -150,7 +155,8 @@ function Monitor({
   const baseColor = useMemo(() => new THREE.Color(base), [base]);
   const [x, y, z] = station.screen.position;
   const [nx, nz] = [Math.sin(station.desk.facing), Math.cos(station.desk.facing)];
-  const normalOffset = 0.04;
+  // Sits just in front of the committed screen's display panel.
+  const normalOffset = 0.05;
 
   useEffect(() => {
     materialRef.current?.color.copy(baseColor).multiplyScalar(intensity);
@@ -171,7 +177,7 @@ function Monitor({
       position={[x + nx * normalOffset, y, z + nz * normalOffset]}
       rotation={[0, station.desk.facing, 0]}
     >
-      <planeGeometry args={[0.6, 0.32]} />
+      <planeGeometry args={[0.8, 0.48]} />
       <meshBasicMaterial ref={materialRef} toneMapped={false} />
     </mesh>
   );
@@ -235,7 +241,7 @@ function DimmedDesk({ station }: { station: DeskStation }) {
   );
 }
 
-/** One desk's live visuals: screen, occupant, status icon and dimming. */
+/** One desk's live visuals: screen, status icon and dimming. */
 function DeskStatus({ station }: { station: DeskStation }) {
   const bot = useOfficeStore((state) => state.bots[station.desk.botId]);
   const botColor = BOT_COLORS[station.desk.botId] ?? "#8b93a1";
@@ -250,16 +256,10 @@ function DeskStatus({ station }: { station: DeskStation }) {
         intensity={visual.monitorIntensity}
         pulsing={visual.pulsing}
       />
-      {visual.occupant ? (
-        <mesh position={station.bot.position} rotation={[0, station.bot.rotationY, 0]}>
-          <capsuleGeometry args={[0.22, 0.5, 4, 8]} />
-          <meshLambertMaterial color={botColor} flatShading />
-        </mesh>
-      ) : null}
       <NamePlate text={station.desk.name} placement={station.namePlate} />
-      {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.05, z]} /> : null}
+      {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.65, z]} /> : null}
       {visual.magnifier ? (
-        <Magnifier position={[x, y + 1.0, z]} rotationY={station.desk.facing} />
+        <Magnifier position={[x, y + 1.55, z]} rotationY={station.desk.facing} />
       ) : null}
       {visual.dim < 1 ? <DimmedDesk station={station} /> : null}
     </group>
@@ -333,10 +333,22 @@ function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
 
 /** Static office scene: the only Canvas in the app, loaded as its own async chunk. */
 export default function OfficeScene({ onContextLost }: { onContextLost?: () => void } = {}) {
+  const bots = useOfficeStore((state) => state.bots);
+  const reducedMotion = usePrefersReducedMotion();
+  // Only pay for a continuous loop while a character is on screen and moving.
+  const continuous = useMemo(
+    () =>
+      shouldRenderContinuously({
+        statuses: DESK_STATIONS.map((station) => bots[station.desk.botId]?.status),
+        reducedMotion,
+      }),
+    [bots, reducedMotion],
+  );
+
   return (
     <Canvas
       dpr={CANVAS_DPR}
-      frameloop={FRAMELOOP}
+      frameloop={continuous ? "always" : FRAMELOOP}
       shadows={SHADOWS}
       camera={CAMERA}
       style={{ position: "fixed", inset: 0 }}
@@ -351,8 +363,13 @@ export default function OfficeScene({ onContextLost }: { onContextLost?: () => v
       <SceneInvalidator />
       <WebGlContextGuard onContextLost={onContextLost} />
       <Room />
-      <Furniture />
+      <ModelBoundary fallback={<Furniture />}>
+        <Suspense fallback={<Furniture />}>
+          <FurnitureModels />
+        </Suspense>
+      </ModelBoundary>
       <DeskVitals />
+      <Characters reducedMotion={reducedMotion} />
       <HandoffFlash />
       <OrbitControls
         enableDamping={false}
