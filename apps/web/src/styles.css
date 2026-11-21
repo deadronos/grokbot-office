@@ -482,3 +482,159 @@ canvas {
   margin: 0;
   opacity: 0.5;
 }
+
+.history-toggle {
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #8b93a1;
+  border-radius: 999px;
+  background: transparent;
+  color: #f4f6fb;
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.history-toggle[aria-pressed="true"] {
+  border-color: #7f9cf5;
+  color: #7f9cf5;
+  opacity: 1;
+}
+
+.history-toggle:hover,
+.history-toggle:focus-visible {
+  outline: 2px solid #f4f6fb;
+  outline-offset: 2px;
+}
+
+/* The replay bar docks where hudLayout leaves room, so it never covers a desk. */
+.history-bar {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.65rem;
+  overflow: auto;
+  border: 1px solid rgb(244 246 251 / 15%);
+  border-radius: 0.5rem;
+  background: rgb(10 13 19 / 78%);
+  color: #f4f6fb;
+  font-size: 0.72rem;
+}
+
+.history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.history-day {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #8b93a1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.history-day input,
+.history-scrubber {
+  accent-color: #7f9cf5;
+}
+
+.history-day input {
+  padding: 0.1rem 0.2rem;
+  border: 1px solid #39414f;
+  border-radius: 0.25rem;
+  background: #141821;
+  color: #f4f6fb;
+  font: inherit;
+}
+
+.history-button {
+  padding: 0.15rem 0.45rem;
+  border: 1px solid #39414f;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: #f4f6fb;
+  font: inherit;
+  cursor: pointer;
+}
+
+.history-button:hover,
+.history-button:focus-visible {
+  border-color: #f4f6fb;
+  outline: none;
+}
+
+.history-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.history-scrubber {
+  flex: 1 1 8rem;
+  min-width: 5rem;
+}
+
+.history-position {
+  color: #8b93a1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-error {
+  margin: 0;
+  color: #e0776c;
+}
+
+.history-loading {
+  margin: 0;
+  opacity: 0.6;
+}
+
+.history-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.9rem;
+  border-top: 1px solid rgb(244 246 251 / 10%);
+  padding-top: 0.35rem;
+}
+
+.history-heading {
+  width: 100%;
+  margin: 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.history-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #aab2c0;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-latency,
+.history-busiest {
+  margin: 0;
+  color: #aab2c0;
+}

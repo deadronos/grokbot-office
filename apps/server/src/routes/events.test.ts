@@ -749,6 +749,123 @@ describe("GET /api/events", () => {
     });
   });
 
+  describe("from / to window", () => {
+    const AT_00 = "2026-01-01T00:00:00.000Z";
+    const AT_02 = "2026-01-01T02:00:00.000Z";
+    const AT_04 = "2026-01-01T04:00:00.000Z";
+    const AT_05 = "2026-01-01T05:00:00.000Z";
+
+    /** Three events at 00, 02 and 04 UTC, inserted directly for exact timestamps. */
+    function windowSetup() {
+      const context = setup();
+      const insert = (id: number, receivedAt: string, status: string) => {
+        context.repo.insertEvent({
+          eventId: ulid(id),
+          botId: "data",
+          type: "status_changed",
+          status: status as never,
+          receivedAt,
+        });
+      };
+      insert(1, AT_00, "working");
+      insert(2, AT_02, "idle");
+      insert(3, AT_04, "working");
+      return context;
+    }
+
+    const page = async (
+      context: ReturnType<typeof windowSetup>,
+      params: Record<string, string>,
+    ) => {
+      const query = new URLSearchParams(params).toString();
+      const res = await getEvents(context.app, context.viewerToken, `?${query}`);
+      return { res, body: (await res.json()) as EventsPage };
+    };
+
+    it("filters received_at as a half-open [from, to) range", async () => {
+      const context = windowSetup();
+
+      const both = await page(context, { from: AT_02, to: AT_04 });
+      expect(both.res.status).toBe(200);
+      expect(both.res.headers.get("cache-control")).toBe("no-store");
+      // 02:00 is included; 04:00 is the open end and is not.
+      expect(seqs(both.body)).toEqual([2]);
+
+      expect(seqs((await page(context, { from: AT_02 })).body)).toEqual([2, 3]);
+      expect(seqs((await page(context, { to: AT_02 })).body)).toEqual([1]);
+      // `lastSeq` stays the global high-water mark, not the window's.
+      expect(both.body.lastSeq).toBe(3);
+    });
+
+    it("pages inside the window with since, limit and hasMore", async () => {
+      const context = windowSetup();
+
+      const first = await page(context, { from: AT_00, to: AT_05, limit: "1" });
+      expect(first.body).toMatchObject({ hasMore: true, nextSince: 1 });
+      expect(seqs(first.body)).toEqual([1]);
+
+      const second = await page(context, {
+        from: AT_00,
+        to: AT_05,
+        limit: "1",
+        since: String(first.body.nextSince),
+      });
+      expect(second.body).toMatchObject({ hasMore: true, nextSince: 2 });
+      expect(seqs(second.body)).toEqual([2]);
+
+      const third = await page(context, {
+        from: AT_00,
+        to: AT_05,
+        limit: "1",
+        since: String(second.body.nextSince),
+      });
+      expect(third.body).toMatchObject({ hasMore: false, nextSince: 3, lastSeq: 3 });
+      expect(seqs(third.body)).toEqual([3]);
+    });
+
+    it("accepts an ISO instant with an offset and normalizes it to UTC", async () => {
+      const context = windowSetup();
+      // 04:00+02:00 is 02:00Z: the window is [02:00Z, 03:00Z), so only seq 2.
+      const { body } = await page(context, {
+        from: "2026-01-01T04:00:00+02:00",
+        to: "2026-01-01T03:00:00Z",
+      });
+      expect(seqs(body)).toEqual([2]);
+    });
+
+    it("keeps hidden bots out of a window", async () => {
+      const { app, viewerToken, ghostEvents } = hiddenSetup();
+      ghostEvents(ghost(1, "status_changed", { status: "idle" }));
+      const body = (await (
+        await getEvents(
+          app,
+          viewerToken,
+          `?from=${encodeURIComponent(AT_00)}&to=${encodeURIComponent("2026-01-02T00:00:00.000Z")}`,
+        )
+      ).json()) as EventsPage;
+      expect(body.events).toEqual([]);
+    });
+
+    const invalid = [
+      `from=${encodeURIComponent(AT_02)}&to=${encodeURIComponent(AT_00)}`,
+      "from=2026-01-01",
+      `from=${encodeURIComponent(AT_00)}&from=${encodeURIComponent(AT_02)}`,
+      `from=${encodeURIComponent(AT_02)}&to=${encodeURIComponent(AT_02)}`,
+      "from=",
+      "to=not-a-date",
+      `from=${encodeURIComponent(AT_00)}&to=${encodeURIComponent(AT_02)}&unknown=1`,
+    ];
+
+    for (const query of invalid) {
+      it(`answers 400 for ?${query}`, async () => {
+        const { app, viewerToken } = setup();
+        const res = await getEvents(app, viewerToken, `?${query}`);
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toEqual({ error: "invalid query" });
+      });
+    }
+  });
+
   it("returns an empty, resumable page on an empty database", async () => {
     const { app, viewerToken } = setup();
     const body = await (await getEvents(app, viewerToken)).json();

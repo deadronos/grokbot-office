@@ -1,6 +1,8 @@
 import { DESKS, type BotSnapshot, type StreamEvent } from "@grokbot-office/shared";
 import { useEffect, useState, type CSSProperties } from "react";
 import { HUD_LAYOUT, hudVariant, type HudVariant } from "./hudLayout";
+import { useHistoryStore } from "./history/historyStore";
+import { selectHistoryNow, useViewedBots, useViewedEvents } from "./history/useViewed";
 import { useOfficeStore } from "./store/officeStore";
 
 const DESK_ORDER = new Map(DESKS.map((desk, index) => [desk.botId, index]));
@@ -60,8 +62,9 @@ function useHudVariant(): HudVariant {
 
 /** Sits in the shell, outside the lazy scene chunk: it only needs the store. */
 export function Hud({ now }: { now: number }) {
-  const bots = useOfficeStore((state) => state.bots);
-  const events = useOfficeStore((state) => state.events);
+  const bots = useViewedBots();
+  const events = useViewedEvents();
+  const historyNow = useHistoryStore(selectHistoryNow);
   const selectedBotId = useOfficeStore((state) => state.selectedBotId);
   const selectBot = useOfficeStore((state) => state.selectBot);
   const variant = useHudVariant();
@@ -69,7 +72,7 @@ export function Hud({ now }: { now: number }) {
     <HudView
       bots={bots}
       events={events}
-      now={now}
+      now={historyNow || now}
       variant={variant}
       selectedBotId={selectedBotId}
       onSelectBot={selectBot}

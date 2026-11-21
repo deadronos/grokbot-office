@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 
-import { useOfficeStore } from "../store/officeStore";
+import { useViewedBots } from "../history/useViewed";
 import { BOT_COLORS } from "./botColors";
 import { characterVariant, materialTint, type AccessoryKind } from "./characterVariants";
 import { DESK_STATIONS, type DeskStation } from "./deskStations";
@@ -237,7 +237,7 @@ function Capsules({ bots }: { bots: Record<string, BotSnapshot> }) {
 }
 
 export function Characters({ reducedMotion }: { reducedMotion: boolean }) {
-  const bots = useOfficeStore((state) => state.bots);
+  const bots = useViewedBots();
   const fallback = <Capsules bots={bots} />;
 
   return (

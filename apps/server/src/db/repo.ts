@@ -133,7 +133,11 @@ export interface Repo {
    * target, are skipped. Visibility changes are not stored as events; open viewers
    * are told to refetch the snapshot instead.
    */
-  getEventsPage(seq: number, limit: number): { rows: Event[]; lastSeq: number };
+  getEventsPage(
+    seq: number,
+    limit: number,
+    window?: { from?: string; to?: string },
+  ): { rows: Event[]; lastSeq: number };
   /** Bots, statuses, open handoffs and the event high-water mark in one transaction. */
   getSnapshot(): SnapshotRows;
   /**
@@ -406,7 +410,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
     },
     listEventsSince: (seq) =>
       db.select().from(events).where(gt(events.seq, seq)).orderBy(events.seq).all(),
-    getEventsPage: (seq, limit) =>
+    getEventsPage: (seq, limit, window) =>
       db.transaction((tx) => {
         const hiddenIds = hiddenBotIds(tx);
         const rows = tx
@@ -417,6 +421,9 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
               gt(events.seq, seq),
               notInArray(events.botId, hiddenIds),
               or(isNull(events.toBotId), notInArray(events.toBotId, hiddenIds)),
+              // Half-open [from, to) on the indexed `received_at`.
+              window?.from === undefined ? undefined : gte(events.receivedAt, window.from),
+              window?.to === undefined ? undefined : lt(events.receivedAt, window.to),
             ),
           )
           .orderBy(events.seq)
