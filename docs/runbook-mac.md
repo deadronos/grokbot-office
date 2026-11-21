@@ -92,6 +92,10 @@ DATABASE_PATH=/Users/<you>/.local/share/grokbot-office/bot-office.db \
   pnpm admin token create --kind viewer
 ```
 
+Without that prefix the command silently uses `apps/server/data/bot-office.db` and
+creates a second, empty database: the token or bot it prints never reaches the
+running service, and nothing warns you. Always pass the absolute path.
+
 ## 3. launchd agent
 
 The committed example is
@@ -398,3 +402,92 @@ DATABASE_PATH=/Users/<you>/.local/share/grokbot-office/bot-office.db pnpm admin 
 | `429 rate limited`                            | client address buckets are shared on loopback; raise the relevant budget or wait for `Retry-After`                                               |
 | Admin routes answer `503`                     | `ADMIN_TOKEN` is unset, the placeholder, or under 32 characters                                                                                  |
 | Viewer is blank but the API works             | `apps/web/dist` is missing; run `pnpm build` and restart                                                                                         |
+
+## 11. cmux status adapter (Mac only, opt-in)
+
+The office can show what cmux workspaces are doing, but only through a small adapter
+that runs on the Mac as your user. The server never calls cmux, and the adapter is
+disabled unless you enable it.
+
+It polls `cmux list-workspaces`, then `cmux list-status` for each workspace, and
+maps the coding-agent state:
+
+| cmux state | event sent                             |
+| ---------- | -------------------------------------- |
+| `Running`  | `task_started`, label = workspace name |
+| `Idle`     | `status_changed` with `idle`           |
+| `Done`     | `task_finished` with `done`            |
+
+When every coding-CLI status disappears after one was `Running`, the adapter sends
+`status_changed` with `idle` so the desk does not stay at work. Only state
+transitions produce an event; an unchanged workspace stays silent. If
+several workspaces are running, the lexicographically first name wins, so the
+label is deterministic. A workspace with no coding-agent status entry is ignored,
+and human `cmux set-status` keys (for example `task=...`) are never treated as a
+state or used as a label.
+
+The adapter sends only the workspace name. Program status text, prompts,
+`list-log` and sidebar log lines, set-status values, git branches and cwd paths are
+never sent or written to its log. Workspace names go through the normal label
+sanitizer and are truncated or skipped, never sent raw. A workspace without a
+custom title falls back to cmux's path-derived title, so give it a custom title if
+that text should not reach the office.
+
+Use a dedicated `cmux` bot, not a second token on an existing bot: one bot is one
+desk row, and the adapter only knows Running/Idle/Done, so it would fight that
+bot's own reports. Create it once, on the Mac, against the real database:
+
+```bash
+DATABASE_PATH=/Users/<you>/.local/share/grokbot-office/bot-office.db \
+  pnpm admin bot create --id cmux --name Cmux
+DATABASE_PATH=/Users/<you>/.local/share/grokbot-office/bot-office.db \
+  pnpm admin token create --kind bot --bot cmux
+```
+
+The token is printed once. Put it in a file outside the repository:
+
+```bash
+install -m 600 /dev/null ~/.config/grokbot-office/cmux.token
+# paste the printed token into that file, then:
+chmod 600 ~/.config/grokbot-office/cmux.token
+```
+
+Run it by hand first (Node 24+ strips the TypeScript, no build step):
+
+```bash
+export CMUX_ADAPTER_ENABLED=true
+export BO_URL=http://127.0.0.1:8787   # the bot API PORT; keep them in step
+export BO_BOT_ID=cmux
+export BO_TOKEN_FILE=/Users/<you>/.config/grokbot-office/cmux.token
+pnpm --filter @grokbot-office/cmux-adapter start        # every 60 s
+pnpm --filter @grokbot-office/cmux-adapter start -- --once   # one poll, then exit
+```
+
+`BO_TOKEN` works too; the file is read only when it is empty, which keeps the token
+out of a launchd plist. The adapter runs on the same Mac as the server, so it talks
+to loopback: do not point it at the Funnel or tailnet URL, and nothing new needs to
+be exposed by Funnel or Serve. The flag must be exactly `true`; without it, or with
+`BO_URL`, `BO_TOKEN`/`BO_TOKEN_FILE` or `BO_BOT_ID` missing, the adapter logs that
+it is disabled, posts nothing and exits 0. Optional settings:
+`CMUX_BIN` (default `/Applications/cmux.app/Contents/Resources/bin/cmux`) and
+`CMUX_ADAPTER_POLL_SEC` (default `60`).
+
+For a permanent adapter, install a separate user LaunchAgent; do not add it to the
+office service's plist. `deploy/launchd/com.example.grokbot-office.cmux-adapter.plist.example`
+is a template with placeholders; launchd expands no `~` or variables, so every path
+must be absolute. cmux is a GUI app, so the job must run in your GUI session:
+
+```bash
+cp deploy/launchd/com.example.grokbot-office.cmux-adapter.plist.example \
+  ~/Library/LaunchAgents/com.example.grokbot-office.cmux-adapter.plist
+# edit every <placeholder>, then:
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.grokbot-office.cmux-adapter.plist
+```
+
+Its log is `~/Library/Logs/grokbot-office/cmux-adapter.log`. A failing poll logs
+`cmux-adapter: poll failed; retrying` and the loop keeps its cadence. Stop it with
+`launchctl bootout gui/$(id -u)/com.example.grokbot-office.cmux-adapter`.
+
+If nothing appears in the office, check that the workspace has a coding-agent
+status entry: a workspace whose only entry is a human `task=...` is ignored on
+purpose. `401` or `403` in the log means the token does not match `BO_BOT_ID`.

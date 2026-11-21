@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Example only. Nothing installs this file.
+
+  A separate user LaunchAgent for the cmux status adapter. Do not add it to
+  com.example.grokbot-office.plist: it is a different process with its own token.
+
+  Replace every <placeholder> before copying it to ~/Library/LaunchAgents/.
+  launchd does not expand ~ or shell variables, so all paths must be absolute.
+  The adapter reads BO_TOKEN_FILE itself; no --env-file is involved here.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.grokbot-office.cmux-adapter</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/&lt;you&gt;/git/grokbot-office/apps/cmux-adapter/src/main.ts</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CMUX_ADAPTER_ENABLED</key>
+    <string>true</string>
+    <key>BO_URL</key>
+    <string>http://127.0.0.1:8787</string>
+    <key>BO_BOT_ID</key>
+    <string>cmux</string>
+    <key>BO_TOKEN_FILE</key>
+    <string>/Users/&lt;you&gt;/.config/grokbot-office/cmux.token</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart after a crash. A clean exit (disabled or SIGTERM) stays stopped. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- launchd creates the log files, not the directory: mkdir -p ~/Library/Logs/grokbot-office -->
+  <key>StandardOutPath</key>
+  <string>/Users/&lt;you&gt;/Library/Logs/grokbot-office/cmux-adapter.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/&lt;you&gt;/Library/Logs/grokbot-office/cmux-adapter.log</string>
+</dict>
+</plist>
