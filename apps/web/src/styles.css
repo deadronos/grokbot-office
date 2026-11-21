@@ -189,15 +189,12 @@ canvas {
 }
 
 .hud {
+  box-sizing: border-box;
   position: fixed;
-  bottom: 1rem;
-  left: 1.25rem;
   z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  width: min(24rem, calc(100vw - 2.5rem));
-  max-height: 55vh;
   padding: 0.7rem 0.85rem;
   overflow: hidden;
   border: 1px solid rgb(244 246 251 / 15%);
@@ -205,6 +202,43 @@ canvas {
   background: rgb(10 13 19 / 55%);
   font-size: 0.78rem;
   pointer-events: none;
+}
+
+/* Narrow screens get one short bar; its sections scroll sideways instead of covering desks. */
+.hud-narrow {
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  pointer-events: auto;
+}
+
+.hud-narrow .hud-section {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hud-narrow .hud-bots,
+.hud-narrow .hud-events {
+  flex-direction: row;
+  gap: 0.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-height: none;
+}
+
+.hud-narrow .hud-bot,
+.hud-narrow .hud-event,
+.hud-narrow .hud-credit {
+  flex: 0 0 auto;
+}
+
+.hud-narrow .hud-credit {
+  align-self: center;
+  white-space: nowrap;
 }
 
 .hud-section {

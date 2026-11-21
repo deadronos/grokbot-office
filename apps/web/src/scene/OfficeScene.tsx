@@ -7,7 +7,13 @@ import { useOfficeStore } from "../store/officeStore";
 import { BOT_COLORS } from "./botColors";
 import { Characters } from "./Characters";
 import { REVIEW_MONITOR, deskVisual, pulseFactor } from "./deskVisuals";
-import { DESK_STATIONS, NAME_PLATE_SIZE, type DeskStation, type Placement } from "./deskStations";
+import {
+  DESK_STATIONS,
+  NAME_PLATE_SIZE,
+  plateVisible,
+  type DeskStation,
+  type Placement,
+} from "./deskStations";
 import { setSceneInvalidator } from "./invalidateScene";
 import { ModelBoundary } from "./ModelBoundary";
 import { FurnitureModels } from "./models";
@@ -256,7 +262,9 @@ function DeskStatus({ station }: { station: DeskStation }) {
         intensity={visual.monitorIntensity}
         pulsing={visual.pulsing}
       />
-      <NamePlate text={station.desk.name} placement={station.namePlate} />
+      {plateVisible(bot?.status) ? (
+        <NamePlate text={station.desk.name} placement={station.namePlate} />
+      ) : null}
       {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.45, z]} /> : null}
       {visual.magnifier ? (
         <Magnifier position={[x, y + 1.38, z]} rotationY={station.desk.facing} />
