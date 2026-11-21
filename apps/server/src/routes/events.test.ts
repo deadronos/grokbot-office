@@ -16,6 +16,8 @@ const auth = (token: string) => ({ authorization: `Bearer ${token}` });
 
 /** Event ids are ULIDs; a counter keeps them distinct and readable in assertions. */
 const ulid = (n: number) => `01J${String(n).padStart(23, "0")}`;
+/** An instant `offsetMs` before `now`; one clock per test keeps windows off the wall. */
+const before = (now: number, offsetMs: number) => new Date(now - offsetMs).toISOString();
 
 function setup() {
   const context = testSetup();
@@ -827,8 +829,6 @@ describe("GET /api/events", () => {
       // 02:00 is included; 04:00 is the open end and is not.
       expect(seqs(both.body)).toEqual([2]);
 
-      expect(seqs((await page(context, { from: AT_02 })).body)).toEqual([2, 3]);
-      expect(seqs((await page(context, { to: AT_02 })).body)).toEqual([1]);
       // `lastSeq` stays the global high-water mark, not the window's.
       expect(both.body.lastSeq).toBe(3);
     });
@@ -898,6 +898,81 @@ describe("GET /api/events", () => {
       const tooWide = await page(context, { from: AT_00, to: "2026-01-09T00:00:00.001Z" });
       expect(tooWide.res.status).toBe(400);
       expect(tooWide.body).toEqual({ error: "invalid query" });
+    });
+
+    describe("one-sided windows", () => {
+      const MINUTE = 60 * 1000;
+      const HOUR = 60 * MINUTE;
+      const DAY = 24 * HOUR;
+
+      /**
+       * One event three, two and one hour before `now`, plus one nine days before.
+       * `now` is shared with the query, so a millisecond of drift cannot move the window.
+       */
+      function recentSetup(now: number) {
+        const context = setup();
+        const insert = (id: number, receivedAt: string) => {
+          context.repo.insertEvent({
+            eventId: ulid(id),
+            botId: "data",
+            type: "status_changed",
+            status: "working",
+            receivedAt,
+          });
+        };
+        insert(1, before(now, 9 * DAY));
+        insert(2, before(now, 3 * HOUR));
+        insert(3, before(now, 2 * HOUR));
+        insert(4, before(now, 1 * HOUR));
+        return context;
+      }
+
+      it("caps a `from`-only window at now", async () => {
+        const now = Date.now();
+        const context = recentSetup(now);
+
+        const { res, body } = await page(context, { from: before(now, 3 * HOUR) });
+        expect(res.status).toBe(200);
+        // The 9-day-old event is out; the ones at and inside `from` are in.
+        expect(seqs(body)).toEqual([2, 3, 4]);
+      });
+
+      it("refuses a `from`-only window older than eight days", async () => {
+        const now = Date.now();
+        const context = recentSetup(now);
+
+        const { res, body } = await page(context, { from: before(now, 8 * DAY + HOUR) });
+        expect(res.status).toBe(400);
+        expect(body).toEqual({ error: "invalid query" });
+
+        // Still accepted while it stays inside the cap.
+        const widest = await page(context, { from: before(now, 8 * DAY - HOUR) });
+        expect(widest.res.status).toBe(200);
+        expect(seqs(widest.body)).toEqual([2, 3, 4]);
+      });
+
+      it("bounds a `to`-only window to the eight days before `to`", async () => {
+        const now = Date.now();
+        const context = recentSetup(now);
+
+        const { res, body } = await page(context, { to: before(now, 2 * HOUR) });
+        expect(res.status).toBe(200);
+        // [to - 8 days, to): the three-hours-ago event is in, the one at `to` is out.
+        expect(seqs(body)).toEqual([2]);
+      });
+
+      it("still pages with since and limit inside a one-sided window", async () => {
+        const now = Date.now();
+        const context = recentSetup(now);
+
+        const { body } = await page(context, {
+          from: before(now, 3 * HOUR),
+          limit: "1",
+          since: "2",
+        });
+        expect(seqs(body)).toEqual([3]);
+        expect(body).toMatchObject({ hasMore: true, nextSince: 3, lastSeq: 4 });
+      });
     });
 
     it("keeps the page-size cap inside a window", async () => {

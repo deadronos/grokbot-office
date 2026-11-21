@@ -541,9 +541,12 @@ own work.
 ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
 500). Values are plain decimal integers without leading zeros (`since=00` and
 `limit=03` are refused). `from` and `to` (ISO instants) narrow the log to the
-half-open `[from, to)` window; a window wider than eight days (the viewer reads
-seven local days plus DST slack) is refused the same way. Unknown, repeated or
-malformed parameters get `400 {"error":"invalid query"}`.
+half-open `[from, to)` window. Every window is at most eight days (the viewer reads
+seven local days plus DST slack), so no query scans the whole log by accident: a
+two-sided window wider than eight days, or a `from` more than eight days old, is
+refused the same way; `from` alone ends at now, and `to` alone starts eight days
+before `to`. Unknown, repeated or malformed parameters get
+`400 {"error":"invalid query"}`.
 Each event is a `StreamEvent`: `to` is a handoff's target bot, `at` the clamped client
 time and `receivedAt` the server time.
 
