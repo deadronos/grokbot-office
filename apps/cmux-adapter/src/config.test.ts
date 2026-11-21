@@ -1,10 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_CMUX_BIN, DEFAULT_POLL_SEC, resolveConfig } from "./config.ts";
+import {
+  DEFAULT_ADAPTER_PREFIX,
+  DEFAULT_CMUX_BIN,
+  DEFAULT_POLL_SEC,
+  resolveConfig,
+} from "./config.ts";
 
 const base = {
   CMUX_ADAPTER_ENABLED: "true",
@@ -40,6 +45,8 @@ describe("resolveConfig", () => {
       botId: "cmux",
       bin: DEFAULT_CMUX_BIN,
       pollSec: DEFAULT_POLL_SEC,
+      prefix: DEFAULT_ADAPTER_PREFIX,
+      allow: [],
     });
   });
 
@@ -53,6 +60,42 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ ...base, CMUX_ADAPTER_POLL_SEC: "0" })).toMatchObject({
       pollSec: DEFAULT_POLL_SEC,
     });
+  });
+
+  it("reads the prefix and the allow list", () => {
+    expect(resolveConfig({ ...base, CMUX_ADAPTER_PREFIX: "bot " })).toMatchObject({
+      prefix: "bot ",
+    });
+    // An empty prefix stays empty: it does not mean "allow all".
+    expect(resolveConfig({ ...base, CMUX_ADAPTER_PREFIX: "" })).toMatchObject({ prefix: "" });
+    expect(
+      resolveConfig({ ...base, CMUX_ADAPTER_ALLOW: " scratch , workspace:1 ,, " }),
+    ).toMatchObject({ allow: ["scratch", "workspace:1"] });
+    expect(resolveConfig({ ...base, CMUX_ADAPTER_ALLOW: "  " })).toMatchObject({ allow: [] });
+  });
+
+  it("warns on a loose token file mode and stays enabled", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cmux-adapter-"));
+    tempDirs.push(dir);
+    const file = join(dir, "cmux.token");
+    writeFileSync(file, "file-token");
+    const warnings: string[] = [];
+    const warn = (line: string) => void warnings.push(line);
+
+    chmodSync(file, 0o644);
+    expect(
+      resolveConfig({ ...base, BO_TOKEN: undefined, BO_TOKEN_FILE: file }, warn),
+    ).toMatchObject({ token: "file-token" });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/0644|644|mode/i);
+    expect(warnings[0]).not.toContain("file-token");
+
+    warnings.length = 0;
+    chmodSync(file, 0o600);
+    expect(
+      resolveConfig({ ...base, BO_TOKEN: undefined, BO_TOKEN_FILE: file }, warn),
+    ).toMatchObject({ token: "file-token" });
+    expect(warnings).toEqual([]);
   });
 
   it("reads the token from a file when BO_TOKEN is unset", () => {
