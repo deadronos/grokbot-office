@@ -13,6 +13,16 @@ export const HUD_LAYOUT = {
 
 export type HudVariant = "wide" | "narrow";
 
+/** Bottom (or top-left on short screens) history dock, with room for stats. */
+export const HISTORY_LAYOUT = {
+  barHeight: 96,
+  gap: 8,
+  wideWidth: 420,
+  shortMaxHeight: 480,
+  shortWidth: 560,
+  inset: 8,
+} as const;
+
 export function hudVariant(width: number, height: number): HudVariant {
   return width >= HUD_LAYOUT.wideMinWidth && width / height >= HUD_LAYOUT.wideMinAspect
     ? "wide"
@@ -32,4 +42,37 @@ export function hudScreenBox({ width, height }: Viewport): ScreenRect {
   }
   const { inset, height: bar } = HUD_LAYOUT.narrow;
   return { x0: inset, x1: width - inset, y0: height - inset - bar, y1: height - inset };
+}
+
+/**
+ * History bar placement. Normally it docks at the bottom: left of the wide HUD,
+ * above the narrow one. Short windows put it at the top-left instead, where the
+ * projected desks still leave room.
+ */
+export function historyBarBox({ width, height }: Viewport): ScreenRect {
+  const { barHeight, gap, wideWidth, shortMaxHeight, shortWidth, inset } = HISTORY_LAYOUT;
+  if (height <= shortMaxHeight) {
+    const left = inset;
+    return {
+      x0: left,
+      x1: Math.min(width - inset, left + shortWidth),
+      y0: inset,
+      y1: inset + barHeight,
+    };
+  }
+  if (hudVariant(width, height) === "wide") {
+    return {
+      x0: inset,
+      x1: inset + wideWidth,
+      y0: height - HUD_LAYOUT.wide.bottom - barHeight,
+      y1: height - HUD_LAYOUT.wide.bottom,
+    };
+  }
+  const bottom = inset + HUD_LAYOUT.narrow.height + gap;
+  return {
+    x0: inset,
+    x1: width - inset,
+    y0: height - bottom - barHeight,
+    y1: height - bottom,
+  };
 }

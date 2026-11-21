@@ -2,6 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 
 import { APP_NAME } from "@grokbot-office/shared";
 
+import { HistoryBar } from "./history/HistoryBar";
+import { useHistoryStore } from "./history/historyStore";
 import { Hud } from "./Hud";
 import { BotDetailsPanel } from "./details/BotDetailsPanel";
 import { SessionBar } from "./SessionBar";
@@ -47,6 +49,8 @@ export function App() {
   const phase = useOfficeStore((state) => state.phase);
   const checkSession = useOfficeStore((state) => state.checkSession);
   const startStream = useOfficeStore((state) => state.startStream);
+  const historyActive = useHistoryStore((state) => state.active);
+  const exitHistory = useHistoryStore((state) => state.exit);
   const now = useClock();
 
   // 200 means the session cookie is still good; 401 puts the login form up.
@@ -58,6 +62,11 @@ export function App() {
     if (phase !== "ready") return;
     return startStream();
   }, [phase, startStream]);
+
+  // A dropped session (logout or 401) must not leave the replay stranded.
+  useEffect(() => {
+    if (phase !== "ready" && historyActive) exitHistory();
+  }, [phase, historyActive, exitHistory]);
 
   useEffect(() => {
     const onHide = () => useOfficeStore.getState().onPageHide();
@@ -78,7 +87,8 @@ export function App() {
       <OfficeStage />
       {phase === "ready" ? <SessionBar /> : null}
       {phase === "ready" && now > 0 ? <Hud now={now} /> : null}
-      {phase === "ready" ? <BotDetailsPanel /> : null}
+      {phase === "ready" && historyActive ? <HistoryBar /> : null}
+      {phase === "ready" && !historyActive ? <BotDetailsPanel /> : null}
       {phase === "login" ? <LoginScreen /> : null}
     </main>
   );

@@ -24,17 +24,25 @@ const integerQuery = z
   .transform(Number)
   .refine(Number.isSafeInteger, "must be a safe integer");
 
+const isoInstant = z.iso
+  .datetime({ offset: true })
+  .transform((value) => new Date(value).toISOString());
+
 const EventsQuery = z
   .object({
     since: integerQuery.optional(),
     limit: integerQuery
       .refine((value) => value >= 1 && value <= EVENTS_LIMIT_MAX, `must be 1-${EVENTS_LIMIT_MAX}`)
       .optional(),
+    from: isoInstant.optional(),
+    to: isoInstant.optional(),
   })
   .strict();
 
 /** Strictly parsed query; repeated or unknown parameters are refused, not merged. */
-function parseEventsQuery(c: Context<AppEnv>): { since: number; limit: number } | undefined {
+function parseEventsQuery(
+  c: Context<AppEnv>,
+): { since: number; limit: number; from?: string; to?: string } | undefined {
   const raw: Record<string, string> = {};
   for (const [key, values] of Object.entries(c.req.queries())) {
     if (values.length !== 1) return undefined;
@@ -42,9 +50,14 @@ function parseEventsQuery(c: Context<AppEnv>): { since: number; limit: number } 
   }
   const parsed = EventsQuery.safeParse(raw);
   if (!parsed.success) return undefined;
+  const { from, to } = parsed.data;
+  // The window is half-open: an empty or reversed range is a caller error.
+  if (from !== undefined && to !== undefined && from >= to) return undefined;
   return {
     since: parsed.data.since ?? 0,
     limit: parsed.data.limit ?? EVENTS_LIMIT_DEFAULT,
+    from,
+    to,
   };
 }
 
@@ -73,7 +86,10 @@ export function eventRoutes({
     if (!query) return c.json({ error: "invalid query" }, 400);
 
     // One read transaction; one extra row answers `hasMore` without a second query.
-    const { rows, lastSeq } = repo.getEventsPage(query.since, query.limit);
+    const { rows, lastSeq } = repo.getEventsPage(query.since, query.limit, {
+      from: query.from,
+      to: query.to,
+    });
     const events = rows.slice(0, query.limit).map(toStreamEvent);
     const hasMore = rows.length > query.limit;
     // Private data: never let a shared cache keep it.

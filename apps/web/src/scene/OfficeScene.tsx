@@ -4,6 +4,7 @@ import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import { useOfficeStore } from "../store/officeStore";
+import { useViewedBot, useViewedBots } from "../history/useViewed";
 import { BOT_COLORS } from "./botColors";
 import { Characters } from "./Characters";
 import { REVIEW_MONITOR, deskVisual, pulseFactor } from "./deskVisuals";
@@ -251,7 +252,7 @@ function DimmedDesk({ station }: { station: DeskStation }) {
 
 /** One desk's live visuals: screen, status icon and dimming. */
 function DeskStatus({ station }: { station: DeskStation }) {
-  const bot = useOfficeStore((state) => state.bots[station.desk.botId]);
+  const bot = useViewedBot(station.desk.botId);
   const botColor = BOT_COLORS[station.desk.botId] ?? "#8b93a1";
   const visual = deskVisual(bot?.status, botColor);
   const [x, y, z] = station.bot.position;
@@ -328,7 +329,7 @@ function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
 
 /** Static office scene: the only Canvas in the app, loaded as its own async chunk. */
 export default function OfficeScene({ onContextLost }: { onContextLost?: () => void } = {}) {
-  const bots = useOfficeStore((state) => state.bots);
+  const bots = useViewedBots();
   const reducedMotion = usePrefersReducedMotion();
   const { packets, settle } = useHandoffPackets(reducedMotion);
   // Only pay for a continuous loop while a character or a packet is moving.

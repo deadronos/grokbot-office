@@ -2,6 +2,8 @@ import { useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+import { useHistoryStore } from "../history/historyStore";
+import { useViewedOpenHandoffs } from "../history/useViewed";
 import { useOfficeStore } from "../store/officeStore";
 import { BOT_COLORS } from "./botColors";
 import { DESK_STATIONS, type DeskStation } from "./deskStations";
@@ -32,17 +34,45 @@ export function useHandoffPackets(reducedMotion: boolean): {
   packets: PacketTimeline[];
   settle: (now: number) => void;
 } {
-  const openHandoffs = useOfficeStore((state) => state.openHandoffs);
+  const openHandoffs = useViewedOpenHandoffs();
+  const active = useHistoryStore((state) => state.active);
   const [packets, setPackets] = useState<PacketTimeline[]>([]);
   // The frame loop must see the newest packets without re-subscribing each frame.
   const packetsRef = useRef<PacketTimeline[]>(packets);
   // Everything already in the store when this first runs is snapshot history.
   const consumedSeqRef = useRef<number | null>(null);
+  const modeRef = useRef<"live" | "history">("live");
 
   useEffect(() => {
     const now = performance.now();
     const state = useOfficeStore.getState();
     const newestEventSeq = state.events.reduce((max, event) => Math.max(max, event.seq), 0);
+    const mode = active ? "history" : "live";
+    // A mode switch starts from a clean packet set, so no live flight survives
+    // into the replay (or the other way round).
+    const previous = modeRef.current === mode ? packetsRef.current : [];
+    modeRef.current = mode;
+
+    if (active) {
+      // Replay packets are already settled; skip live flights and the flash.
+      consumedSeqRef.current = Math.max(
+        consumedSeqRef.current ?? 0,
+        state.snapshotSeq,
+        state.lastEventSeq,
+        newestEventSeq,
+      );
+      const next = syncPackets({
+        previous,
+        openHandoffs,
+        liveSends: new Map(),
+        now,
+        reducedMotion: true,
+      });
+      packetsRef.current = next;
+      setPackets(next);
+      return;
+    }
+
     // Seed from the snapshot: a send that arrived while this chunk loaded is
     // newer than `snapshotSeq` and must still fly.
     const lastConsumedSeq = consumedSeqAtFirstRun({
@@ -60,7 +90,7 @@ export function useHandoffPackets(reducedMotion: boolean): {
     consumedSeqRef.current = Math.max(live.lastConsumedSeq, newestEventSeq);
     if (state.handoffFlash) state.clearHandoffFlash();
     const next = syncPackets({
-      previous: packetsRef.current,
+      previous,
       openHandoffs,
       liveSends: live.liveSends,
       now,
@@ -68,7 +98,7 @@ export function useHandoffPackets(reducedMotion: boolean): {
     });
     packetsRef.current = next;
     setPackets(next);
-  }, [openHandoffs, reducedMotion]);
+  }, [openHandoffs, reducedMotion, active]);
 
   const settle = useCallback(
     (now: number) => {
@@ -188,7 +218,7 @@ export function HandoffPackets({
   settle: (now: number) => void;
   reducedMotion: boolean;
 }) {
-  const openHandoffs = useOfficeStore((state) => state.openHandoffs);
+  const openHandoffs = useViewedOpenHandoffs();
 
   useFrame(() => settle(performance.now()));
 

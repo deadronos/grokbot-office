@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { DESKS } from "@grokbot-office/shared";
 
-import { HUD_LAYOUT, hudScreenBox, hudVariant } from "./hudLayout";
+import { HUD_LAYOUT, historyBarBox, hudScreenBox, hudVariant } from "./hudLayout";
 import { defaultCamera, deskScreenRect, rectsOverlap, type Viewport } from "./scene/screenBox";
 
 const VIEWPORTS: readonly Viewport[] = [
@@ -42,6 +42,23 @@ describe("hud layout", () => {
       expect(hud.y0).toBeGreaterThanOrEqual(0);
       expect(hud.x1).toBeLessThanOrEqual(viewport.width);
       expect(hud.y1).toBeLessThanOrEqual(viewport.height);
+    }
+  });
+
+  it("docks the history bar without covering a desk", () => {
+    for (const viewport of VIEWPORTS) {
+      const camera = defaultCamera(viewport);
+      const bar = historyBarBox(viewport);
+      expect(bar.x0).toBeGreaterThanOrEqual(0);
+      expect(bar.y0).toBeGreaterThanOrEqual(0);
+      expect(bar.x1).toBeLessThanOrEqual(viewport.width);
+      expect(bar.y1).toBeLessThanOrEqual(viewport.height);
+      for (const desk of DESKS) {
+        expect(
+          rectsOverlap(bar, deskScreenRect(camera, desk, viewport)),
+          `history bar covers ${desk.name} at ${viewport.width}x${viewport.height}`,
+        ).toBe(false);
+      }
     }
   });
 });
