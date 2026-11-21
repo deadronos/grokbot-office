@@ -257,9 +257,9 @@ function DeskStatus({ station }: { station: DeskStation }) {
         pulsing={visual.pulsing}
       />
       <NamePlate text={station.desk.name} placement={station.namePlate} />
-      {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.65, z]} /> : null}
+      {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.45, z]} /> : null}
       {visual.magnifier ? (
-        <Magnifier position={[x, y + 1.55, z]} rotationY={station.desk.facing} />
+        <Magnifier position={[x, y + 1.38, z]} rotationY={station.desk.facing} />
       ) : null}
       {visual.dim < 1 ? <DimmedDesk station={station} /> : null}
     </group>

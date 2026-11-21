@@ -6,14 +6,14 @@ import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.j
 
 import { useOfficeStore } from "../store/officeStore";
 import { BOT_COLORS } from "./botColors";
-import { characterVariant, type AccessoryKind } from "./characterVariants";
+import { characterVariant, materialTint, type AccessoryKind } from "./characterVariants";
 import { DESK_STATIONS, type DeskStation } from "./deskStations";
 import { ModelBoundary } from "./ModelBoundary";
 import { useModel } from "./models";
 import { SIT_HIP_HEIGHT, mergePoseClips, poseForStatus } from "./statusPose";
 
 /** `character-worker.glb` metres → scene units; matched to the desk models. */
-export const CHARACTER_SCALE = 2.2;
+export const CHARACTER_SCALE = 1.95;
 const FADE_SECONDS = 0.3;
 
 /** Cheap primitives on the shared rig: one silhouette per character, no new assets. */
@@ -96,7 +96,7 @@ function CharacterRig({
       // Skinned bounds come from the bind pose, so culling would pop mid-animation.
       mesh.frustumCulled = false;
       const material = (mesh.material as THREE.MeshStandardMaterial).clone();
-      material.color.set(variant.tint);
+      material.color.set(materialTint(variant.tint));
       mesh.material = material;
       materials.push(material);
     });

@@ -11,7 +11,7 @@ export type AccessoryKind =
   | "none";
 
 export type CharacterVariant = {
-  /** Multiplies the shared `colormap` atlas, so one rig still reads as nine bots. */
+  /** Raw bot colour; see `materialTint` for what actually reaches the material. */
   tint: string;
   accessory: AccessoryKind;
   /** Bone the accessory is attached to; it follows the animation. */
@@ -40,4 +40,16 @@ export function characterVariant(botId: string): CharacterVariant {
     accessory: variant.accessory,
     bone: variant.bone,
   };
+}
+
+/** How far the tint is pulled from white; multiplying the atlas at full strength muddies it. */
+const TINT_STRENGTH = 0.45;
+
+/** Blends `tint` from white, so the shared colormap keeps its contrast. */
+const blendFromWhite = (channel: number) => Math.round(255 + (channel - 255) * TINT_STRENGTH);
+
+export function materialTint(tint: string): string {
+  const rgb = Number.parseInt(tint.slice(1), 16);
+  const channels = [(rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff].map(blendFromWhite);
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
