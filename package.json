@@ -11,7 +11,8 @@
     "format:check": "oxfmt --check .",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "admin": "pnpm --filter @grokbot-office/server admin --"
+    "admin": "pnpm --filter @grokbot-office/server admin --",
+    "assets:build": "pnpm --filter @grokbot-office/assets build:assets"
   },
   "devDependencies": {
     "oxfmt": "^0.78.0",
