@@ -42,9 +42,16 @@ const AGENT_STATUS_KEYS = new Set([
 /** A busy workspace outranks a finished one; a finished one outranks an idle one. */
 const STATE_PRIORITY: readonly CmuxState[] = ["running", "done", "idle"];
 
+/** Only the last path segment is a safe public label; `~` alone has none. */
+function basename(text: string): string {
+  const last = text.trim().replace(/\/+$/, "").split("/").at(-1) ?? "";
+  return last === "~" || last === "…" ? "" : last;
+}
+
 /**
  * `list-workspaces --json` answers JSON on stdout; older builds print text.
- * Only the ref and the workspace name are kept.
+ * Only the ref and the workspace name are kept. An auto title is path-derived,
+ * so only its basename is kept; a custom title is taken as written.
  */
 export function parseWorkspaces(stdout: string): Workspace[] {
   try {
@@ -56,10 +63,11 @@ export function parseWorkspaces(stdout: string): Workspace[] {
           const workspace = entry as { ref?: unknown; title?: unknown; custom_title?: unknown };
           if (typeof workspace.ref !== "string") return [];
           if (workspace.ref === "") return [];
-          const name = [workspace.custom_title, workspace.title].find(
-            (value): value is string => typeof value === "string" && value !== "",
-          );
-          return [{ ref: workspace.ref, name: name ?? workspace.ref }];
+          const customTitle =
+            typeof workspace.custom_title === "string" ? workspace.custom_title.trim() : "";
+          const title = typeof workspace.title === "string" ? workspace.title.trim() : "";
+          const name = customTitle !== "" ? customTitle : basename(title);
+          return name === "" ? [] : [{ ref: workspace.ref, name }];
         });
       }
     }
@@ -72,7 +80,11 @@ export function parseWorkspaces(stdout: string): Workspace[] {
     if (!match) return [];
     const [, ref, rawName] = match;
     if (ref === undefined || rawName === undefined) return [];
-    const name = rawName.replace(/\s+\[(?:selected|pinned|current)\]\s*$/, "").trim();
+    const displayed = rawName.replace(/\s+\[(?:selected|pinned|current)\]\s*$/, "").trim();
+    // A displayed custom title is kept; a path-like one is reduced to its basename.
+    const looksLikePath =
+      displayed.startsWith("~") || displayed.startsWith("…") || displayed.includes("/");
+    const name = looksLikePath ? basename(displayed) : displayed;
     return name === "" ? [] : [{ ref, name }];
   });
 }
@@ -106,19 +118,37 @@ export async function workspaceState(run: CmuxRunner, ref: string): Promise<Cmux
   return parseStatus(await run(["list-status", "--workspace", ref]));
 }
 
-/** Resolves each workspace to the one state the adapter is allowed to see. */
-export function cmuxList(run: CmuxRunner): () => Promise<{ name: string; state?: CmuxState }[]> {
+export type WorkspaceFilter = { prefix: string; allow: readonly string[] };
+
+/** Skip-by-default: only bot-owned workspaces pass, before any state is read. */
+export function isAllowed({ ref, name }: Workspace, { prefix, allow }: WorkspaceFilter): boolean {
+  if (allow.includes(name) || allow.includes(ref)) return true;
+  // An empty prefix allows nothing; the allow list is the only other way in.
+  return prefix !== "" && name.startsWith(prefix);
+}
+
+/** Resolves each allowed workspace to the one state the adapter is allowed to see. */
+export function cmuxList(
+  run: CmuxRunner,
+  filter: WorkspaceFilter,
+): () => Promise<{ name: string; state?: CmuxState }[]> {
   return async () => {
-    const workspaces = await listWorkspaces(run);
+    const workspaces = (await listWorkspaces(run)).filter((workspace) =>
+      isAllowed(workspace, filter),
+    );
     return Promise.all(
       workspaces.map(async ({ ref, name }) => ({ name, state: await workspaceState(run, ref) })),
     );
   };
 }
 
-/** Optional CLI chrome must not reach the stdout that parsing reads. */
+/**
+ * Optional CLI chrome must not reach the stdout that parsing reads, and the bot
+ * token must not reach the cmux child at all.
+ */
 export function cmuxEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...env, CMUX_QUIET: "1" };
+  const { BO_TOKEN: _token, BO_TOKEN_FILE: _tokenFile, ...rest } = env;
+  return { ...rest, CMUX_QUIET: "1" };
 }
 
 export function cmuxRunner(bin: string): CmuxRunner {

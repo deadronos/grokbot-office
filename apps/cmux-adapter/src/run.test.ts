@@ -38,6 +38,43 @@ describe("run", () => {
     expect(posts).toEqual(["/api/events", "/api/bots/cmux/heartbeat"]);
   });
 
+  it("backs off exponentially on failures and resets after a success", async () => {
+    const sleeps: number[] = [];
+    const outcomes = [true, true, false, true]; // fail, fail, success, fail
+    let polls = 0;
+    await run(enabled, {
+      post: async () => {},
+      list: async () => {
+        if (outcomes[polls++]) throw new Error("cmux down");
+        return alpha;
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        if (sleeps.length === 4) throw new Error("stop the loop");
+      },
+      log: () => {},
+    }).catch(() => {});
+
+    expect(sleeps).toEqual([60_000, 120_000, 60_000, 60_000]);
+  });
+
+  it("caps the backoff at eight poll intervals", async () => {
+    const sleeps: number[] = [];
+    await run(enabled, {
+      post: async () => {},
+      list: async () => {
+        throw new Error("cmux down");
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        if (sleeps.length === 5) throw new Error("stop the loop");
+      },
+      log: () => {},
+    }).catch(() => {});
+
+    expect(sleeps).toEqual([60_000, 120_000, 240_000, 480_000, 480_000]);
+  });
+
   it("keeps polling and logging a generic failure", async () => {
     const posts: string[] = [];
     const logs: string[] = [];

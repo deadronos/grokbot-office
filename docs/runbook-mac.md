@@ -429,9 +429,23 @@ state or used as a label.
 The adapter sends only the workspace name. Program status text, prompts,
 `list-log` and sidebar log lines, set-status values, git branches and cwd paths are
 never sent or written to its log. Workspace names go through the normal label
-sanitizer and are truncated or skipped, never sent raw. A workspace without a
-custom title falls back to cmux's path-derived title, so give it a custom title if
-that text should not reach the office.
+sanitizer and are truncated or skipped, never sent raw. A workspace with a custom
+title sends that title. A workspace without one sends only the basename of cmux's
+auto title (`~/projects/demo-app` becomes `demo-app`, `…/org/demo-repo/dist`
+becomes `dist`); a full or home-relative path, or a `workspace:…` ref, is never
+sent as a label. A workspace whose title yields no basename is skipped. Give a
+workspace a custom title if you want a specific public label.
+
+Only bot-owned workspaces are reported; everything else is skipped by default.
+A workspace is reported when its custom title (or the basename that would be sent)
+starts with `CMUX_ADAPTER_PREFIX` (default `gbo `, trailing space included, so
+`gbo #21 nits` matches but `gbother` does not), or when its name or ref appears in
+the comma-separated `CMUX_ADAPTER_ALLOW` list. That filter runs before aggregation,
+so a personal Running workspace can neither become the label nor change the desk
+state. An empty `CMUX_ADAPTER_PREFIX` is not "allow all": with the allow list empty
+too, nothing is reported. Bots should keep naming their workspaces `gbo …`, or the
+operator lists them in `CMUX_ADAPTER_ALLOW`. If nothing matches, the adapter sends
+no workspace events and only heartbeats.
 
 Use a dedicated `cmux` bot, not a second token on an existing bot: one bot is one
 desk row, and the adapter only knows Running/Idle/Done, so it would fight that
@@ -470,7 +484,8 @@ be exposed by Funnel or Serve. The flag must be exactly `true`; without it, or w
 `BO_URL`, `BO_TOKEN`/`BO_TOKEN_FILE` or `BO_BOT_ID` missing, the adapter logs that
 it is disabled, posts nothing and exits 0. Optional settings:
 `CMUX_BIN` (default `/Applications/cmux.app/Contents/Resources/bin/cmux`) and
-`CMUX_ADAPTER_POLL_SEC` (default `60`).
+`CMUX_ADAPTER_POLL_SEC` (default `60`), `CMUX_ADAPTER_PREFIX` (default `gbo `) and
+`CMUX_ADAPTER_ALLOW` (default empty).
 
 For a permanent adapter, install a separate user LaunchAgent; do not add it to the
 office service's plist. `deploy/launchd/com.example.grokbot-office.cmux-adapter.plist.example`
@@ -485,7 +500,10 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.grokbot-offi
 ```
 
 Its log is `~/Library/Logs/grokbot-office/cmux-adapter.log`. A failing poll logs
-`cmux-adapter: poll failed; retrying` and the loop keeps its cadence. Stop it with
+`cmux-adapter: poll failed; retrying` and backs off: the wait doubles from
+`CMUX_ADAPTER_POLL_SEC` on each consecutive failure (60 s, 120 s, 240 s, …), capped
+at 8× that interval (8 minutes by default). A successful poll resets the wait to
+`CMUX_ADAPTER_POLL_SEC`. `--once` still makes a single attempt. Stop it with
 `launchctl bootout gui/$(id -u)/com.example.grokbot-office.cmux-adapter`.
 
 If nothing appears in the office, check that the workspace has a coding-agent

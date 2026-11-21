@@ -16,7 +16,7 @@ export type RunOptions = {
   log?: (line: string) => void;
 };
 
-/** Runs until stopped, or polls once with `once`. A failed poll retries next tick. */
+/** Runs until stopped, or polls once with `once`. A failed poll backs off. */
 export async function run(
   env: Record<string, string | undefined>,
   options: RunOptions = {},
@@ -30,20 +30,29 @@ export async function run(
 
   const adapter = createAdapter({
     post: options.post ?? createPost(config.baseUrl, config.token),
-    list: options.list ?? cmuxList(cmuxRunner(config.bin)),
+    list:
+      options.list ??
+      cmuxList(cmuxRunner(config.bin), { prefix: config.prefix, allow: config.allow }),
     botId: config.botId,
   });
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
+  // A failed poll doubles the wait, capped at 8× pollSec; a success resets it.
+  const capSec = config.pollSec * 8;
+  let delaySec = config.pollSec;
   for (;;) {
+    let ok = true;
     try {
       await adapter.poll();
     } catch {
+      ok = false;
       // No CLI output, prompt or token here: local logs stay safe to share.
       log("cmux-adapter: poll failed; retrying");
     }
     if (options.once) return;
-    await sleep(config.pollSec * 1000);
+    if (ok) delaySec = config.pollSec;
+    await sleep(delaySec * 1000);
+    if (!ok) delaySec = Math.min(capSec, delaySec * 2);
   }
 }
