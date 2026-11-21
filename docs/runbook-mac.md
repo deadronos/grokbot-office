@@ -22,7 +22,8 @@ Do not commit real hostnames, tailnet names, user names, paths, IPs or tokens.
   (`corepack enable`).
 - Tailscale 1.52 or newer, MagicDNS and HTTPS certificates enabled, and Funnel
   allowed for this node in the tailnet policy file. `tailscale funnel status` and
-  `tailscale serve status` must work.
+  `tailscale serve status` must work. Funnel needs a free HTTPS port on the node:
+  check `tailscale serve status --json` before enabling it (step 4).
 - The repo checked out on the Mac, for example `/Users/<you>/git/grokbot-office`.
 - The viewer is a static build: `pnpm build` must have produced `apps/web/dist`.
 
@@ -43,20 +44,30 @@ the web app when that directory exists, so rebuild and restart after a web chang
 The real env file must not live in the checkout. Put it under your home directory:
 
 ```bash
-mkdir -p ~/.config/grokbot-office
+umask 077
+mkdir -p ~/.local/share/grokbot-office ~/.config/grokbot-office
 cp .env.example ~/.config/grokbot-office/.env
 chmod 600 ~/.config/grokbot-office/.env
 ```
+
+Create both directories with mode `700`: the config directory holds the admin and
+bot tokens, and the data directory holds the SQLite database, which stores token
+hashes. SQLite creates its files as `644`, so create the directory private first
+rather than relying on the file mode.
 
 Then edit `~/.config/grokbot-office/.env`:
 
 - `ADMIN_TOKEN` — generate with `openssl rand -base64 32`. While it is unset, still
   `change-me`, or shorter than 32 characters after trimming, every `/api/admin/*`
   route answers `503`.
+- `NODE_ENV=production` — set it. The only effect in the server is that
+  `DATABASE_PATH` must then be absolute (see the next bullet); it invents no other
+  behavior.
 - `DATABASE_PATH` — an absolute path, e.g.
   `/Users/<you>/.local/share/grokbot-office/bot-office.db`. Relative paths resolve
   against `apps/server/`, which is not what you want for a service; an absolute path
-  works either way and is required when `NODE_ENV=production`.
+  works either way and is required when `NODE_ENV=production` (the server throws
+  `DATABASE_PATH must be an absolute path in production` at startup otherwise).
 - `VIEWER_TAILNET_ONLY=true`, `PORT=8787`, `VIEWER_PORT=8788` — the two-port setup in
   step 4.
 - `HSTS=true` — only when every client reaches the app over HTTPS (see step 4).
@@ -88,9 +99,13 @@ The committed example is
 It runs one Node process, restarts it after a crash, and appends stdout/stderr to
 `~/Library/Logs/grokbot-office/server.log`.
 
-Before installing, replace every `<you>` and check the Node path (`command -v node` —
-Homebrew on Apple Silicon uses `/opt/homebrew/bin/node`, but nvm and other installs
-differ; launchd has no shell `PATH`, so the path must be absolute).
+Before installing, replace every `<you>`. Then resolve the Node path:
+`command -v node` may return a version-manager shim (volta, fnm, asdf, vite-plus and
+similar), and launchd fails or starts the wrong Node when `ProgramArguments` points
+at a shim. Resolve it to a real binary — for example `/opt/homebrew/bin/node` on
+Apple Silicon — and confirm it with `<path> --version` before putting that path in
+the plist. launchd has no shell `PATH`, so the path must be absolute. The committed
+example already uses `/opt/homebrew/bin/node`.
 
 ### Install
 
@@ -156,7 +171,19 @@ machine, so never change the bind address.
 | viewer  | `VIEWER_PORT`, 8788  | viewer, session, admin and stream routes, plus the built web app                                 |
 
 Everything else answers `404` on the bot port. So expose only `PORT` publicly, and
-keep `VIEWER_PORT` inside the tailnet:
+keep `VIEWER_PORT` inside the tailnet.
+
+First check what the node already serves. Plain `tailscale serve status` and
+`tailscale funnel status` hide foreground serves; `--json` shows them:
+
+```bash
+tailscale serve status --json
+```
+
+If another app has a foreground `tailscale serve --bg=false` on 443, Funnel fails
+with `foreground listener already exists for port 443` and the plain status
+commands do not show why. Funnel may only use 443, 8443 or 10000, so pick a free
+one. With 443 free (the default):
 
 ```bash
 # public: https://<machine>.<tailnet>.ts.net -> 127.0.0.1:8787
@@ -166,11 +193,26 @@ tailscale funnel --bg 8787
 tailscale serve --bg --https=8443 8788
 ```
 
-Funnel may only listen on 443, 8443 or 10000; `--bg` keeps the configuration across
-reboots and Tailscale restarts. Check both with `tailscale funnel status` and
-`tailscale serve status`. The viewer URL is then
-`https://<machine>.<tailnet>.ts.net:8443`; the API base for bots is
-`https://<machine>.<tailnet>.ts.net`.
+If 443 is already taken, put Funnel on 10000 (or 8443) and the viewer elsewhere:
+
+```bash
+tailscale funnel --bg --https=10000 8787
+tailscale serve --bg --https=8443 8788
+```
+
+In that case point bots' `BO_URL` at `https://<machine>.<tailnet>.ts.net:10000`,
+including the port. `--bg` keeps the configuration across reboots and Tailscale
+restarts. Check both with `tailscale funnel status` and `tailscale serve status`.
+The viewer URL is then `https://<machine>.<tailnet>.ts.net:8443`; the API base for
+bots is `https://<machine>.<tailnet>.ts.net`, or the Funnel port URL above.
+
+**Never** run `tailscale serve reset` (or treat `funnel reset` / `serve reset` as the
+normal undo). Those clear every app's Serve/Funnel entry on the node. Turn off only
+these routes with `off` on the same port (step 9).
+
+Testing Funnel from the Mac itself is not a public-path check: the MagicDNS
+hostname resolves over the tailnet. Test from another network, or use
+`curl --resolve` against the hostname's public DNS answer.
 
 Bots only need the bot port (register, heartbeat, events). The viewer needs the viewer
 port and must be opened in a browser on a device in the tailnet. There is no public
@@ -318,27 +360,25 @@ tokens live in the database — the backup is as sensitive as the token file.
 
 ## 9. Rollback / disable
 
-Undo the exposure first, then the service:
+Undo the exposure first, then the service. Do not use `tailscale funnel reset` or
+`tailscale serve reset`: those clear every Serve/Funnel entry on the node, not just
+this service. Turn off only these routes, on the HTTPS ports actually enabled:
 
 ```bash
-tailscale funnel reset
-tailscale serve reset
+tailscale funnel --https=443 off     # or --https=10000 if 443 was taken
+tailscale serve --https=8443 off
+```
+
+If that is not the setup you installed, check `tailscale serve status --json` first.
+Then stop and remove the LaunchAgent:
+
+```bash
 launchctl bootout gui/$(id -u)/com.example.grokbot-office
 rm ~/Library/LaunchAgents/com.example.grokbot-office.plist
 ```
 
-`tailscale funnel reset` and `tailscale serve reset` clear all Serve/Funnel
-configuration on that node, not just this service — check `tailscale serve status`
-first if the node serves anything else, and otherwise turn off only these routes with
-the `off` suffix on the original command:
-
-```bash
-tailscale funnel --bg 8787 off
-tailscale serve --bg --https=8443 8788 off
-```
-
-Then remove or disable the LaunchAgent. The env file and the database stay where they
-are; delete `~/.config/grokbot-office/.env` only if you also intend to revoke tokens.
+The env file and the database stay where they are; delete
+`~/.config/grokbot-office/.env` only if you also intend to revoke tokens.
 Revoke tokens through the admin CLI while the database still exists:
 
 ```bash
