@@ -307,7 +307,9 @@ Restore, in this order:
 3. Put the backup at `DATABASE_PATH` (an online `.backup` copy is self-contained, so
    its `.db` is enough). Restoring a cold copy means restoring all three files —
    `.db`, `-wal`, `-shm` — together, from the same moment.
-4. `launchctl kickstart -k gui/$(id -u)/com.example.grokbot-office`.
+4. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.grokbot-office.plist`.
+   Step 1 unloaded the job, so reload it the same way as the install section;
+   `kickstart` would fail on an unloaded job.
 
 Migrations from the running build are applied on start, so a backup older than the
 current schema is upgraded in place; a backup from a newer build may not open. Copy a
