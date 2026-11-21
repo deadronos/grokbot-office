@@ -46,16 +46,6 @@ export class TokenBuckets {
     return { allowed: true };
   }
 
-  /** What `take` would answer, without spending a token. */
-  peek(key: string, burst: number, perMin: number): RateLimitDecision {
-    const bucket = this.buckets.get(key);
-    if (!bucket) return { allowed: true };
-    const perSec = perMin / 60;
-    const tokens = Math.min(burst, bucket.tokens + ((this.clock() - bucket.at) / 1000) * perSec);
-    if (tokens >= 1) return { allowed: true };
-    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((1 - tokens) / perSec)) };
-  }
-
   private evictOldest(): void {
     let oldestKey: string | undefined;
     let oldestAt = Infinity;
@@ -76,8 +66,6 @@ export type RateLimits = {
   failedAuth: (key: string) => RateLimitDecision;
   /** Garbage session cookies, counted (and spent) only after the lookup fails. */
   cookieFailure: (key: string) => RateLimitDecision;
-  /** The cookie-failure ceiling, inspectable without spending it (the failure spends). */
-  cookieFailurePeek: (key: string) => RateLimitDecision;
 };
 
 const cookieKey = (key: string) => `cookie:${key}`;
@@ -94,8 +82,6 @@ export function createRateLimits(
     failedAuth: (key) => buckets.take(`failed:${key}`, config.ipBurst, config.ipPerMin),
     cookieFailure: (key) =>
       buckets.take(cookieKey(key), config.cookieFailurePerMin, config.cookieFailurePerMin),
-    cookieFailurePeek: (key) =>
-      buckets.peek(cookieKey(key), config.cookieFailurePerMin, config.cookieFailurePerMin),
   };
 }
 

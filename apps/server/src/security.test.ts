@@ -270,7 +270,7 @@ describe("rate limits", () => {
     ).toBe(true);
   });
 
-  it("ceils garbage-cookie failures per IP instead of hashing them forever", async () => {
+  it("ceils garbage-cookie failures per IP without hashing them forever", async () => {
     const { app, clock } = rateLimitedApp({
       perMin: 60,
       burst: 2,
@@ -283,7 +283,7 @@ describe("rate limits", () => {
         headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
       });
 
-    // Two failures fit the ceiling; the third is refused before another hash.
+    // Two failures fit the ceiling; the third answers 429 and is cleared again.
     expect((await garbage()).status).toBe(401);
     expect((await garbage()).status).toBe(401);
     const limited = await garbage();
@@ -293,6 +293,33 @@ describe("rate limits", () => {
     // Two per minute: half a minute later the ceiling has room again.
     clock.now += 31_000;
     expect((await garbage()).status).toBe(401);
+  });
+
+  it("still accepts a valid session cookie from an IP whose garbage bucket is spent", async () => {
+    const { app, viewer } = rateLimitedApp({
+      perMin: 60,
+      burst: 2,
+      ipPerMin: 60,
+      ipBurst: 2,
+      cookieFailurePerMin: 2,
+    });
+    const cookie = sessionCookieHeader(
+      await app.request("/api/session", {
+        method: "POST",
+        headers: { authorization: `Bearer ${viewer.token}` },
+      }),
+    );
+    const garbage = () =>
+      app.request("/api/state", {
+        headers: { cookie: `${SESSION_COOKIE_NAME}=not-a-real-secret` },
+      });
+
+    // Every viewer behind Funnel shares one loopback IP, so this flood must not lock
+    // the valid session out.
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(401);
+    expect((await garbage()).status).toBe(429);
+    expect((await app.request("/api/state", { headers: { cookie } })).status).toBe(200);
   });
 
   it("keeps rate-limit buckets apart per surface", async () => {

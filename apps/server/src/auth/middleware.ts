@@ -243,13 +243,8 @@ export function requireViewer({
     const now = nowUtc();
     const header = c.req.header("authorization");
     const secret = getCookie(c, SESSION_COOKIE_NAME);
-    // A cookie failure would still cost one hash and one lookup; check the ceiling
-    // first so a garbage-cookie flood stops paying that once it is spent.
-    if (header === undefined && secret !== undefined) {
-      // Scalar gate before the hash; the failure branch below spends the token.
-      const peek = (c.get("limits") as RateLimits | undefined)?.cookieFailurePeek(clientIp(c));
-      if (peek && !peek.allowed) return rateLimited(c, peek.retryAfterSec);
-    }
+    // No gate before the lookup: every viewer shares the loopback IP behind Funnel,
+    // so draining this bucket with garbage must not lock out a valid session.
     const result = validateViewer({
       repo,
       adminToken,
@@ -261,9 +256,9 @@ export function requireViewer({
     });
     if (!result.ok) {
       // Bearer failures and unauthenticated requests spend their own buckets, counted
-      // only after they fail. A cookie failure spends the per-IP cookie ceiling, which is
-      // high enough that an honest stale-cookie viewer still gets its 401 and only floods
-      // start paying: the check above already stopped an exhausted bucket before the hash.
+      // only after they fail. A cookie failure spends the per-IP cookie ceiling, high
+      // enough that an honest stale cookie still gets its 401 and is cleared; over the
+      // cap, garbage gets 429. Success paths never touch this bucket.
       if (header !== undefined)
         return failedAuthLimited(c) ?? reject(c, result.status, result.reason, result.tokenId);
       if (secret === undefined)

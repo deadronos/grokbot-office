@@ -74,7 +74,7 @@ describe("TokenBuckets", () => {
     expect(limits.ip("10.0.0.1")).toEqual(ALLOW);
   });
 
-  it("counts cookie failures in a high ceiling of their own, peekable without spending", () => {
+  it("counts cookie failures in a high ceiling of their own", () => {
     const limits = createRateLimits({
       perMin: 60,
       burst: 1,
@@ -82,10 +82,8 @@ describe("TokenBuckets", () => {
       ipBurst: 1,
       cookieFailurePerMin: 2,
     });
-    expect(limits.cookieFailurePeek("10.0.0.1")).toEqual(ALLOW);
     expect(limits.cookieFailure("10.0.0.1")).toEqual(ALLOW);
     expect(limits.cookieFailure("10.0.0.1")).toEqual(ALLOW);
-    expect(limits.cookieFailurePeek("10.0.0.1").allowed).toBe(false);
     expect(limits.cookieFailure("10.0.0.1").allowed).toBe(false);
     // Garbage cookies leave the bearer and no-credential budgets alone.
     expect(limits.ip("10.0.0.1")).toEqual(ALLOW);

@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 
-import { BotId, PODS, getDesk, type Pod } from "@grokbot-office/shared";
+import { BotId, PODS, RegisterBody, getDesk, type Pod } from "@grokbot-office/shared";
 
 import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
@@ -19,8 +19,17 @@ export type Output = (line: string) => void;
 
 function flag(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
-  return index === -1 ? undefined : args[index + 1];
+  if (index === -1) return undefined;
+  const value = args[index + 1];
+  // `--name --desk 3` would otherwise silently name the bot "--desk".
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${name} needs a value`);
+  }
+  return value;
 }
+
+/** The register schema's limits, so the CLI cannot store what the API would reject. */
+const ProfileFields = RegisterBody.pick({ name: true, role: true, avatar: true });
 
 /**
  * Creates the bot row a fresh bot needs before `token create --kind bot` can work.
@@ -51,14 +60,21 @@ export function botCreate(repo: Repo, args: string[], out: Output): void {
 
   const name = flag(args, "--name");
   if (name === undefined) throw new Error("--name <name> is required");
-  const role = flag(args, "--role") ?? "bot";
-  const avatar = flag(args, "--avatar") ?? "robot";
+  const profile = ProfileFields.safeParse({
+    name,
+    role: flag(args, "--role") ?? "bot",
+    avatar: flag(args, "--avatar") ?? "robot",
+  });
+  if (!profile.success) {
+    const issue = profile.error.issues[0];
+    throw new Error(`--${String(issue?.path[0])} ${issue?.message ?? "is invalid"}`);
+  }
   const now = nowUtc();
   repo.upsertBot({
     id: parsed.data,
-    name,
-    role,
-    avatar,
+    name: profile.data.name,
+    role: profile.data.role,
+    avatar: profile.data.avatar,
     pod: pod as Pod,
     hidden: false,
     createdAt: now,

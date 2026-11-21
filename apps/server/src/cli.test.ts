@@ -101,6 +101,30 @@ describe("admin CLI commands", () => {
     );
   });
 
+  it("rejects a flag whose value is missing or another flag", () => {
+    const { repo } = setup();
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "--desk", "0"], noop)).toThrow(
+      /--name needs a value/,
+    );
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--role"], noop)).toThrow(
+      /--role needs a value/,
+    );
+    expect(() => botCreate(repo, ["--id", "lumi", "--name"], noop)).toThrow(/--name needs a value/);
+  });
+
+  it("applies the register limits to name, role and avatar", () => {
+    const { repo } = setup();
+    expect(() => botCreate(repo, ["--id", "lumi", "--name", "x".repeat(41)], noop)).toThrow(
+      /--name .*40/,
+    );
+    expect(() =>
+      botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--role", "r".repeat(61)], noop),
+    ).toThrow(/--role .*60/);
+    expect(() =>
+      botCreate(repo, ["--id", "lumi", "--name", "Lumi", "--avatar", "a".repeat(61)], noop),
+    ).toThrow(/--avatar .*60/);
+  });
+
   it("keeps bots outside the layout HUD-only in the requested pod", () => {
     const { repo } = setup();
     botCreate(repo, ["--id", "scribe", "--name", "Scribe", "--pod", "ops"], () => undefined);
