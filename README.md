@@ -10,8 +10,8 @@ web app. The web app signs a viewer in, keeps a zustand store in sync with the
 server (`GET /api/state` plus the SSE stream) and renders the static office scene:
 nine fixed desks, a low-poly bot per desk and name plates. Status visuals (desk colour,
 thought bubble, magnifier, dimming), the HUD bot list and event feed, and the handoff
-flash are wired to live store state; the packet/tray handoff animation and the bot
-details panel remain later issues.
+packet flying into each desk's inbox tray are wired to live store state; the bot
+details panel remains a later issue.
 
 ## Stack
 
@@ -99,7 +99,11 @@ refetches `GET /api/state`, because the frame does not carry name, role, avatar 
 A `status_changed` event without a `label` keeps the current one while the bot is
 working or waiting, and clears it when the event comes to rest (`idle`/`offline`).
 The HUD list (desk order) and event feed (newest 20) render as text only, and a
-handoff sets a `handoffFlash` the scene turns into a short beam. When the web app
+handoff sets a `handoffFlash`, and the scene turns it into a packet that arcs from
+the sender's desk into the receiver's inbox tray in 1.2 s (`PACKET_FLIGHT_MS`); the
+tray shows that bot's open-handoff count, several packets stack in one tray, and an
+accept lifts the packet out. Handoffs already open when the app connects are already
+in the tray, and reduced motion skips the flight and the pickup. When the web app
 mounts it calls `isWebGlAvailable()` before loading the scene chunk, so a machine
 without WebGL goes straight to the fallback instead of the error boundary. Name
 plates sit high in front of each desk, clear of its screen and every other desk,
