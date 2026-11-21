@@ -102,7 +102,9 @@ The HUD list (desk order) and event feed (newest 20) render as text only, and a
 handoff sets a `handoffFlash` the scene turns into a short beam. When the web app
 mounts it calls `isWebGlAvailable()` before loading the scene chunk, so a machine
 without WebGL goes straight to the fallback instead of the error boundary. Name
-plates sit high above the chair so they cannot cover the desk in front. Top right: a sign-out
+plates sit high in front of each desk, clear of its screen and every other desk,
+and disappear with an absent or offline bot. The HUD is a right-hand panel on wide
+screens and a short bottom bar below 1280px; both stay off every desk. Top right: a sign-out
 button, plus the connection indicator:
 
 - `live` – the stream is open and event frames or 25 s `ping` frames (`data: {}`) arrive

@@ -151,6 +151,14 @@ describe("HudView", () => {
   });
 });
 
+describe("hud box", () => {
+  it("counts padding and border inside the tested height and width", () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "styles.css"), "utf8");
+    const rule = css.slice(css.indexOf(".hud {")).split("}")[0];
+    expect(rule).toContain("box-sizing: border-box");
+  });
+});
+
 describe("asset credit", () => {
   it("credits Kenney CC0 with a link", () => {
     const html = render({});

@@ -1,5 +1,7 @@
 import { DESKS, type BotSnapshot, type StreamEvent } from "@grokbot-office/shared";
+import { useEffect, useState, type CSSProperties } from "react";
 
+import { HUD_LAYOUT, hudVariant, type HudVariant } from "./hudLayout";
 import { useOfficeStore } from "./store/officeStore";
 
 const DESK_ORDER = new Map(DESKS.map((desk, index) => [desk.botId, index]));
@@ -40,11 +42,29 @@ function byDeskThenName(a: { id: string; name: string }, b: { id: string; name: 
   return order !== 0 ? order : a.name.localeCompare(b.name);
 }
 
+function useHudVariant(): HudVariant {
+  const [viewport, setViewport] = useState(() =>
+    typeof window === "undefined"
+      ? {
+          width: HUD_LAYOUT.wideMinWidth,
+          height: HUD_LAYOUT.wideMinWidth / HUD_LAYOUT.wideMinAspect,
+        }
+      : { width: window.innerWidth, height: window.innerHeight },
+  );
+  useEffect(() => {
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return hudVariant(viewport.width, viewport.height);
+}
+
 /** Sits in the shell, outside the lazy scene chunk: it only needs the store. */
 export function Hud({ now }: { now: number }) {
   const bots = useOfficeStore((state) => state.bots);
   const events = useOfficeStore((state) => state.events);
-  return <HudView bots={bots} events={events} now={now} />;
+  const variant = useHudVariant();
+  return <HudView bots={bots} events={events} now={now} variant={variant} />;
 }
 
 /** Pure view so the HUD can be rendered without a live store (or a WebGL canvas). */
@@ -52,15 +72,31 @@ export function HudView({
   bots,
   events,
   now,
+  variant = "narrow",
 }: {
   bots: Record<string, BotSnapshot>;
   events: StreamEvent[];
   now: number;
+  variant?: HudVariant;
 }) {
   const list = Object.values(bots).toSorted(byDeskThenName);
+  const style: CSSProperties =
+    variant === "wide"
+      ? {
+          right: HUD_LAYOUT.wide.right,
+          bottom: HUD_LAYOUT.wide.bottom,
+          width: HUD_LAYOUT.wide.width,
+          maxHeight: `${HUD_LAYOUT.wide.maxHeightVh}vh`,
+        }
+      : {
+          left: HUD_LAYOUT.narrow.inset,
+          right: HUD_LAYOUT.narrow.inset,
+          bottom: HUD_LAYOUT.narrow.inset,
+          height: HUD_LAYOUT.narrow.height,
+        };
 
   return (
-    <aside className="hud" aria-label="Office status">
+    <aside className={`hud hud-${variant}`} style={style} aria-label="Office status">
       <section className="hud-section">
         <h2 className="hud-heading">Bots</h2>
         <ul className="hud-bots">

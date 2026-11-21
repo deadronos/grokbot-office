@@ -1,4 +1,4 @@
-import { DESKS, type Desk } from "@grokbot-office/shared";
+import { DESKS, type BotStatus, type Desk } from "@grokbot-office/shared";
 
 export type Placement = {
   position: [number, number, number];
@@ -44,6 +44,12 @@ export const DESK_STATIONS: readonly DeskStation[] = DESKS.map((desk) => ({
   chairBack: place(desk, 0, 0.7, -1),
   // The character rig's origin is the seat surface in its `sit` pose.
   bot: place(desk, 0, SEAT_TOP, -0.75),
-  // High above the chair, clear of the desk in front (see deskStations.test.ts).
-  namePlate: place(desk, 0, 3.05, -0.75),
+  // High above the desk front, clear of its screen and every other desk
+  // (see the projected coverage check in deskStations.test.ts).
+  namePlate: place(desk, 0, 3.6, 0.9),
 }));
+
+/** An absent or offline bot has no character, so it gets no floating label either. */
+export function plateVisible(status: BotStatus | undefined): boolean {
+  return status !== undefined && status !== "offline";
+}
