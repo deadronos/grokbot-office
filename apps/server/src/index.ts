@@ -17,12 +17,15 @@ import {
 } from "./config.ts";
 import { openDatabase } from "./db/database.ts";
 import { createSqliteRepo } from "./db/repo.ts";
+import { loadRootEnv } from "./env.ts";
 import { startHeartbeatSweeper, startRetentionPrune } from "./jobs.ts";
 import { createRateLimits } from "./rate-limit.ts";
 import { createStreamHub } from "./stream/hub.ts";
 
 /** How long shutdown waits for open connections before force-closing them. */
 const SHUTDOWN_TIMEOUT_MS = 5000;
+
+loadRootEnv(true);
 
 /** The built viewer, if `pnpm build` has run; the viewer surface serves it when present. */
 const webDist = process.env.WEB_DIST ?? fileURLToPath(new URL("../../web/dist", import.meta.url));

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { Hono } from "hono";
 
 import { BotId, RegisterBody } from "@grokbot-office/shared";
@@ -9,24 +9,20 @@ import type { Repo, Token } from "../db/repo.ts";
 import type { StreamHub } from "../stream/hub.ts";
 import { nowUtc } from "../time.ts";
 
-const CreateTokenBody = z
-  .object({
-    // `admin` is deliberately not issuable: admin access stays env-only.
-    kind: z.enum(["bot", "viewer"]),
-    botId: BotId.optional(),
-  })
-  .strict();
+const CreateTokenBody = z.strictObject({
+  // `admin` is deliberately not issuable: admin access stays env-only.
+  kind: z.enum(["bot", "viewer"]),
+  botId: z.optional(BotId),
+});
 
-const PatchBotBody = z
-  .object({
-    // Same sanitizing and caps as registration.
-    name: RegisterBody.shape.name.optional(),
-    role: RegisterBody.shape.role.optional(),
-    avatar: RegisterBody.shape.avatar.optional(),
-    pod: RegisterBody.shape.pod.optional(),
-    hidden: z.boolean().optional(),
-  })
-  .strict();
+const PatchBotBody = z.strictObject({
+  // Same sanitizing and caps as registration.
+  name: z.optional(RegisterBody.shape.name),
+  role: z.optional(RegisterBody.shape.role),
+  avatar: z.optional(RegisterBody.shape.avatar),
+  pod: z.optional(RegisterBody.shape.pod),
+  hidden: z.optional(z.boolean()),
+});
 
 export function tokenSummary(token: Token) {
   return {

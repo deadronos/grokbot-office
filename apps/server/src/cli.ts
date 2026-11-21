@@ -1,12 +1,15 @@
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 
+import { z } from "zod/mini";
+
 import { BotId, PODS, RegisterBody, getDesk, type Pod } from "@grokbot-office/shared";
 
 import { issueToken } from "./auth/tokens.ts";
 import { openDatabase } from "./db/database.ts";
 import type { Repo } from "./db/repo.ts";
 import { createSqliteRepo } from "./db/repo.ts";
+import { loadRootEnv } from "./env.ts";
 import { nowUtc } from "./time.ts";
 
 const USAGE = `usage:
@@ -29,7 +32,7 @@ function flag(args: string[], name: string): string | undefined {
 }
 
 /** The register schema's limits, so the CLI cannot store what the API would reject. */
-const ProfileFields = RegisterBody.pick({ name: true, role: true, avatar: true });
+const ProfileFields = z.pick(RegisterBody, { name: true, role: true, avatar: true });
 
 /**
  * Creates the bot row a fresh bot needs before `token create --kind bot` can work.
@@ -177,6 +180,8 @@ export function isEntryModule(argv1: string | undefined, moduleUrl: string): boo
 }
 
 if (isEntryModule(process.argv[1], import.meta.url)) {
+  // Not at import time: tests must not pick up a developer's real .env.
+  loadRootEnv();
   // `pnpm admin ...` forwards arguments after its own `--`.
   const argv = process.argv.slice(2);
   if (argv[0] === "--") argv.shift();

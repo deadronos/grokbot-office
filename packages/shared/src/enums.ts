@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 export const BOT_STATUSES = ["idle", "working", "waiting", "reviewing", "offline"] as const;
 export const botStatusSchema = z.enum(BOT_STATUSES);
