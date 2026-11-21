@@ -7,6 +7,7 @@ import { BOT_COLORS } from "./botColors";
 import { DESK_STATIONS, type DeskStation } from "./deskStations";
 import {
   PACKET_SIZE,
+  consumedSeqAtFirstRun,
   deskStation,
   liveSendsFromEvents,
   packetPose,
@@ -42,10 +43,14 @@ export function useHandoffPackets(reducedMotion: boolean): {
     const now = performance.now();
     const state = useOfficeStore.getState();
     const newestEventSeq = state.events.reduce((max, event) => Math.max(max, event.seq), 0);
-    // A snapshot can land with a lastEventSeq past the feed (its seed arrives
-    // after): treat that gap as already seen, or its old sends would fly.
-    const consumed = consumedSeqRef.current ?? state.lastEventSeq;
-    const lastConsumedSeq = state.lastEventSeq > newestEventSeq ? state.lastEventSeq : consumed;
+    // Seed from the snapshot: a send that arrived while this chunk loaded is
+    // newer than `snapshotSeq` and must still fly.
+    const lastConsumedSeq = consumedSeqAtFirstRun({
+      consumed: consumedSeqRef.current,
+      snapshotSeq: state.snapshotSeq,
+      lastEventSeq: state.lastEventSeq,
+      newestEventSeq,
+    });
     const live = liveSendsFromEvents({
       events: state.events,
       lastConsumedSeq,

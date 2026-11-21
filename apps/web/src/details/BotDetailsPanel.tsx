@@ -21,8 +21,28 @@ export function panelBot(
   return state.selectedBotId ? state.bots[state.selectedBotId] : undefined;
 }
 
+/**
+ * What a focus restore needs from an element; the page body stands in for a
+ * HUD row that left the snapshot while the panel was open.
+ */
+export type FocusTarget = { focus: () => void; isConnected: boolean };
+
+/** Where closing sends focus: the stored row while it exists, else the fallback. */
+export function focusRestoreTarget<T extends FocusTarget>(previous: T | null, fallback: T): T {
+  return previous?.isConnected ? previous : fallback;
+}
+
+/** A bot switch stores whatever holds focus now, so close returns to the new row. */
+export function retargetFocus<T extends FocusTarget>(
+  previous: T | null,
+  active: T | null,
+): T | null {
+  return active ?? previous;
+}
+
 export function BotDetailsPanel() {
   const bot = useOfficeStore(panelBot);
+  const bots = useOfficeStore((state) => state.bots);
   const openHandoffs = useOfficeStore((state) => state.openHandoffs);
   const events = useOfficeStore((state) => state.events);
   const clearSelectedBot = useOfficeStore((state) => state.clearSelectedBot);
@@ -31,7 +51,7 @@ export function BotDetailsPanel() {
   return (
     <BotDetailsView
       bot={bot}
-      details={botDetails(bot, openHandoffs, events)}
+      details={botDetails(bot, openHandoffs, events, bots)}
       onClose={clearSelectedBot}
     />
   );
@@ -70,10 +90,14 @@ export function BotDetailsView({
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  // Whatever opened the panel; a switch retargets it to the newly chosen row.
+  const previousRef = useRef<FocusTarget | null>(null);
+  const shownBotIdRef = useRef(bot.id);
 
-  // Focus moves in on open and returns to the HUD row on close; `onClose` is stable.
+  // Focus moves in on open and returns on close; `onClose` is stable.
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previousRef.current = active;
     const onKeyDown = (event: KeyboardEvent) => {
       if (isCloseKey(event.key)) onClose();
     };
@@ -82,9 +106,18 @@ export function BotDetailsView({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       // The HUD entry may be gone (bot left the snapshot); the body is the fallback.
-      if (previous?.isConnected) previous.focus();
+      focusRestoreTarget(previousRef.current, document.body).focus();
     };
   }, [onClose]);
+
+  // Switching bots in place only retargets: the cleanup above must not steal
+  // focus back to the row of the bot that was shown before the switch.
+  useEffect(() => {
+    if (shownBotIdRef.current === bot.id) return;
+    shownBotIdRef.current = bot.id;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previousRef.current = retargetFocus(previousRef.current, active);
+  }, [bot.id]);
 
   return (
     <section className="details-panel" role="dialog" aria-labelledby="bot-details-name">

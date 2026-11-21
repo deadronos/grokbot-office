@@ -55,6 +55,8 @@ type OfficeData = {
   bots: Record<string, BotSnapshot>;
   openHandoffs: Handoff[];
   lastEventSeq: number;
+  /** `lastEventSeq` as of the applied snapshot; live events do not move it. */
+  snapshotSeq: number;
   /** Newest last, capped at `FEED_LIMIT`. */
   events: StreamEvent[];
   /** Set by a live handoff_sent, cleared by the scene after its flash. */
@@ -89,6 +91,7 @@ const EMPTY_DATA: OfficeData = {
   bots: {},
   openHandoffs: [],
   lastEventSeq: 0,
+  snapshotSeq: 0,
   events: [],
   handoffFlash: null,
   selectedBotId: null,
@@ -235,6 +238,7 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
       bots: Object.fromEntries(snapshot.bots.map((bot) => [bot.id, bot])),
       openHandoffs: snapshot.openHandoffs,
       lastEventSeq: snapshot.lastEventSeq,
+      snapshotSeq: snapshot.lastEventSeq,
       // Hidden bots must leave the feed, not just the list, for open viewers:
       // a line naming one as sender or as handoff target goes too.
       events: capFeed(
@@ -261,7 +265,8 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
 
   clearHandoffFlash: () => set({ handoffFlash: null }),
 
-  // Only a bot in the snapshot gets a panel; a click on an absent desk is a no-op.
+  // A bot in the snapshot opens its panel; an absent id leaves no panel (selection
+  // becomes `null`), so a desk click for a bot that just left clears the panel.
   selectBot: (botId) => set({ selectedBotId: get().bots[botId] ? botId : null }),
 
   clearSelectedBot: () => set({ selectedBotId: null }),

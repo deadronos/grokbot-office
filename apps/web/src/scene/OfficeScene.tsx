@@ -286,7 +286,10 @@ function DeskVitals() {
   );
 }
 
-/** Invisible boxes over each desk body: a still click selects its bot, an orbit drag does not. */
+/**
+ * Invisible boxes over each desk body: a still click selects its bot, an orbit
+ * drag does not. A desk whose bot is not in the snapshot clears the selection.
+ */
 function DeskPicker() {
   return (
     <group>
