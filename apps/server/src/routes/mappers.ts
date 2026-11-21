@@ -21,8 +21,28 @@ export function compareByLayout(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-export function toBotSnapshot(bot: Bot, status: Status | undefined): BotSnapshot {
+/**
+ * Clock and both silence windows. A bot quiet past `timeoutMs` reads as `away`,
+ * without being written; past `awayMs` the sweeper has already written offline.
+ */
+export type Presence = { nowMs: number; timeoutMs: number; awayMs: number };
+
+export function toBotSnapshot(
+  bot: Bot,
+  status: Status | undefined,
+  presence?: Presence,
+): BotSnapshot {
   const desk = getDesk(bot.id);
+  const lastSeenAt = status?.lastHeartbeatAt ?? bot.createdAt;
+  const stored = status?.status ?? "offline";
+  // `away` is derived here, never stored: the activity underneath survives. It only
+  // covers the away window; older silence is the sweeper's offline event.
+  const age = presence === undefined ? 0 : presence.nowMs - new Date(lastSeenAt).getTime();
+  const away =
+    presence !== undefined &&
+    stored !== "offline" &&
+    age > presence.timeoutMs &&
+    age <= presence.awayMs;
   return {
     id: bot.id,
     name: bot.name,
@@ -31,14 +51,15 @@ export function toBotSnapshot(bot: Bot, status: Status | undefined): BotSnapshot
     // The layout is canonical for desks, so it also decides the pod of a layout bot.
     pod: desk?.pod ?? bot.pod,
     ...(desk ? { desk } : {}),
-    status: status?.status ?? "offline",
+    status: away ? "away" : stored,
     ...(status?.label === null || status?.label === undefined ? {} : { label: status.label }),
     ...(status?.taskId === null || status?.taskId === undefined ? {} : { taskId: status.taskId }),
     ...(status?.handoffId === null || status?.handoffId === undefined
       ? {}
       : { handoffId: status.handoffId }),
     since: status?.since ?? bot.createdAt,
-    lastHeartbeatAt: status?.lastHeartbeatAt ?? bot.createdAt,
+    lastHeartbeatAt: lastSeenAt,
+    lastSeenAt,
     lastEventSeq: status?.lastEventSeq ?? 0,
   };
 }

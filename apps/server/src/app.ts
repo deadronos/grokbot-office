@@ -204,7 +204,16 @@ export function createApp({
   app.route("/api/admin", adminRoutes(repo, hub));
   app.route("/api/bots", botRoutes(repo, heartbeat, hub));
   app.route("/api/events", eventRoutes({ repo, adminToken, hub, policy: session }));
-  app.route("/api/state", stateRoutes({ repo, adminToken, policy: session }));
+  app.route(
+    "/api/state",
+    stateRoutes({
+      repo,
+      adminToken,
+      policy: session,
+      timeoutSec: heartbeat.timeoutSec,
+      awaySec: heartbeat.awaySec,
+    }),
+  );
   app.route(
     "/api/session",
     sessionRoutes({

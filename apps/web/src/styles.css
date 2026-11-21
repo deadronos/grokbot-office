@@ -361,6 +361,10 @@ canvas {
   background: #e0a94f;
 }
 
+.status-away {
+  background: #6f8bb0;
+}
+
 .status-offline {
   background: #5a616e;
 }

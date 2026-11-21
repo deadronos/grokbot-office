@@ -188,6 +188,11 @@ export interface Repo {
    */
   sweepStaleBots(cutoff: string, now: string): number;
   /**
+   * Bots whose last report is older than `cutoff` but that are not `offline` yet:
+   * the `away` set. Read-only, so away never overwrites the stored activity.
+   */
+  staleOnlineBotIds(cutoff: string): string[];
+  /**
    * Drops events older than `cutoff`, then closed handoffs aged past it that nothing
    * still refers to (events first, then `bot_status`). Returns what was removed.
    */
@@ -820,6 +825,13 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
         }
         return stale.length;
       }),
+    staleOnlineBotIds: (cutoff) =>
+      db
+        .select({ botId: botStatus.botId })
+        .from(botStatus)
+        .where(and(lt(botStatus.lastHeartbeatAt, cutoff), ne(botStatus.status, "offline")))
+        .all()
+        .map((row) => row.botId),
     pruneRetention: (cutoff) =>
       db.transaction((tx) => {
         const removedEvents = tx.delete(events).where(lt(events.receivedAt, cutoff)).run().changes;

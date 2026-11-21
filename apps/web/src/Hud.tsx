@@ -18,6 +18,18 @@ export function formatSince(iso: string, now: number): string {
   return `${Math.floor(seconds / 86_400)}d`;
 }
 
+/**
+ * The status cell. `away` ages from the last report, never from `since` (which is
+ * how long the stored activity has run).
+ */
+export function botStatusLabel(
+  bot: Pick<BotSnapshot, "status" | "since" | "lastSeenAt">,
+  now: number,
+): string {
+  if (bot.status !== "away") return bot.status;
+  return `away · last seen ${formatSince(bot.lastSeenAt ?? bot.since, now)} ago`;
+}
+
 /** One plain-text line per event; React renders it as text, never as markup. */
 export function describeEvent(event: StreamEvent): string {
   switch (event.type) {
@@ -127,11 +139,13 @@ export function HudView({
               >
                 <span className={`status-dot status-${bot.status}`} aria-hidden="true" />
                 <span className="hud-name">{bot.name}</span>
-                <span className="hud-status">{bot.status}</span>
+                <span className="hud-status">{botStatusLabel(bot, now)}</span>
                 {bot.label ? <span className="hud-label">{bot.label}</span> : null}
-                <time className="hud-since" dateTime={bot.since}>
-                  {formatSince(bot.since, now)}
-                </time>
+                {bot.status === "away" ? null : (
+                  <time className="hud-since" dateTime={bot.since}>
+                    {formatSince(bot.since, now)}
+                  </time>
+                )}
               </button>
             </li>
           ))}

@@ -3,7 +3,10 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
+import type { BotSnapshot } from "@grokbot-office/shared";
+
 import { useOfficeStore } from "../store/officeStore";
+import { botStatusLabel } from "../Hud";
 import { useViewedBot, useViewedBots } from "../history/useViewed";
 import { BOT_COLORS } from "./botColors";
 import { Characters } from "./Characters";
@@ -120,11 +123,21 @@ function createNameTexture(text: string): THREE.CanvasTexture {
   canvas.height = 128;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("2D canvas unavailable for name plates");
-  context.font = "600 64px system-ui, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillStyle = "#f4f6fb";
-  context.fillText(text, 256, 68);
+  const [name = "", status] = text.split("\n");
+  if (status === undefined) {
+    context.font = "600 64px system-ui, sans-serif";
+    context.fillText(name, 256, 68);
+  } else {
+    // Two lines share the plate, so the status never widens it over the desks.
+    context.font = "600 52px system-ui, sans-serif";
+    context.fillText(name, 256, 46);
+    context.font = "500 30px system-ui, sans-serif";
+    context.globalAlpha = 0.75;
+    context.fillText(status, 256, 96);
+  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
@@ -132,6 +145,8 @@ function createNameTexture(text: string): THREE.CanvasTexture {
 
 function NamePlate({ text, placement }: { text: string; placement: Placement }) {
   const meshRef = useRef<THREE.Mesh>(null);
+  // The texture only rebuilds when the label changes: an away bot's age refreshes on
+  // the next snapshot, which is also when the server recomputes it.
   const texture = useMemo(() => createNameTexture(text), [text]);
   useEffect(() => () => texture.dispose(), [texture]);
   // Billboard toward the camera so plates stay readable as the orbit moves.
@@ -250,6 +265,12 @@ function DimmedDesk({ station }: { station: DeskStation }) {
   );
 }
 
+/** A quiet bot's plate carries the away label; every other plate is just the name. */
+function plateText(name: string, bot: BotSnapshot | undefined): string {
+  if (bot?.status !== "away") return name;
+  return `${name}\n${botStatusLabel(bot, Date.now())}`;
+}
+
 /** One desk's live visuals: screen, status icon and dimming. */
 function DeskStatus({ station }: { station: DeskStation }) {
   const bot = useViewedBot(station.desk.botId);
@@ -266,7 +287,7 @@ function DeskStatus({ station }: { station: DeskStation }) {
         pulsing={visual.pulsing}
       />
       {plateVisible(bot?.status) ? (
-        <NamePlate text={station.desk.name} placement={station.namePlate} />
+        <NamePlate text={plateText(station.desk.name, bot)} placement={station.namePlate} />
       ) : null}
       {visual.thoughtBubble ? <ThoughtBubble position={[x, y + 1.45, z]} /> : null}
       {visual.magnifier ? (

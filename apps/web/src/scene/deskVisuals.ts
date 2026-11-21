@@ -52,6 +52,17 @@ export function deskVisual(status: BotStatus | undefined, botColor: string): Des
         magnifier: true,
         pulsing: false,
       };
+    case "away":
+      // Present but quiet: the chair stays taken, the screen and desk go dim, no motion.
+      return {
+        monitor: IDLE_MONITOR,
+        monitorIntensity: 0.2,
+        dim: 0.7,
+        occupant: true,
+        thoughtBubble: false,
+        magnifier: false,
+        pulsing: false,
+      };
     case "offline":
       return {
         monitor: IDLE_MONITOR,

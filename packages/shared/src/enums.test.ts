@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOT_STATUSES,
+  CLIENT_STATUSES,
   EVENT_TYPES,
   HANDOFF_STATES,
   PODS,
@@ -10,8 +11,9 @@ import {
 } from "./enums";
 
 describe("enums", () => {
-  it("lists the five bot statuses", () => {
-    expect(BOT_STATUSES).toEqual(["idle", "working", "waiting", "reviewing", "offline"]);
+  it("lists the bot statuses and keeps away out of client reports", () => {
+    expect(BOT_STATUSES).toEqual(["idle", "working", "waiting", "reviewing", "away", "offline"]);
+    expect(CLIENT_STATUSES).toEqual(["idle", "working", "waiting", "reviewing", "offline"]);
   });
 
   it("lists client and server-only event types", () => {

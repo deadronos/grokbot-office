@@ -50,7 +50,12 @@ const hub = createStreamHub();
 const repo = createSqliteRepo(db);
 
 // Background jobs: both timers are `unref`ed so they never keep the process alive alone.
-const stopSweeper = startHeartbeatSweeper({ repo, hub, timeoutSec: heartbeat.timeoutSec });
+const stopSweeper = startHeartbeatSweeper({
+  repo,
+  hub,
+  timeoutSec: heartbeat.timeoutSec,
+  awaySec: heartbeat.awaySec,
+});
 const stopPrune = startRetentionPrune({ repo, retentionDays });
 
 const servers: ServerType[] = [];

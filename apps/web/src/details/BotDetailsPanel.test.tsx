@@ -13,6 +13,7 @@ import {
 import { botDetails } from "./botDetails";
 
 const AT = "2026-01-01T00:00:00.000Z";
+const NOW = Date.parse(AT);
 
 const bot = (overrides: Partial<BotSnapshot> = {}): BotSnapshot => ({
   id: "data",
@@ -65,6 +66,7 @@ function renderPanel(
       bot={subject}
       details={botDetails(subject, openHandoffs, events, bots)}
       onClose={() => {}}
+      now={NOW}
     />,
   );
 }
@@ -105,6 +107,17 @@ describe("BotDetailsView", () => {
       /type="button"[^>]*class="details-close"|class="details-close"[^>]*type="button"/,
     );
     expect(html).toContain(">Close<");
+  });
+
+  it("labels an away bot with its last-seen age", () => {
+    const html = renderPanel(
+      bot({ status: "away", lastSeenAt: "2025-12-31T23:48:00.000Z", label: "issue-13" }),
+    );
+
+    expect(html).toContain("away · last seen 12m ago");
+    // The label must stay inside the panel, not widen it.
+    expect(html).not.toContain("overflow");
+    expect(html).toContain("issue-13");
   });
 
   it("handles an empty bot with empty states", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_HEARTBEAT_AWAY_SEC,
   DEFAULT_HEARTBEAT_INTERVAL_SEC,
   DEFAULT_HEARTBEAT_TIMEOUT_SEC,
   DEFAULT_RETENTION_DAYS,
@@ -24,21 +25,30 @@ import {
 
 describe("resolveHeartbeatConfig", () => {
   it("falls back to the documented defaults", () => {
-    expect(resolveHeartbeatConfig({})).toEqual({ intervalSec: 60, timeoutSec: 300 });
+    expect(resolveHeartbeatConfig({})).toEqual({
+      intervalSec: 60,
+      timeoutSec: 300,
+      awaySec: 86_400,
+    });
     expect(DEFAULT_HEARTBEAT_INTERVAL_SEC).toBe(60);
     expect(DEFAULT_HEARTBEAT_TIMEOUT_SEC).toBe(300);
+    expect(DEFAULT_HEARTBEAT_AWAY_SEC).toBe(86_400);
   });
 
   it("treats blank values as unset", () => {
     expect(
       resolveHeartbeatConfig({ HEARTBEAT_INTERVAL_SEC: " ", HEARTBEAT_TIMEOUT_SEC: "" }),
-    ).toEqual({ intervalSec: 60, timeoutSec: 300 });
+    ).toEqual({ intervalSec: 60, timeoutSec: 300, awaySec: 86_400 });
   });
 
   it("reads overrides and trims surrounding whitespace", () => {
     expect(
-      resolveHeartbeatConfig({ HEARTBEAT_INTERVAL_SEC: " 30 ", HEARTBEAT_TIMEOUT_SEC: "120 " }),
-    ).toEqual({ intervalSec: 30, timeoutSec: 120 });
+      resolveHeartbeatConfig({
+        HEARTBEAT_INTERVAL_SEC: " 30 ",
+        HEARTBEAT_TIMEOUT_SEC: "120 ",
+        HEARTBEAT_AWAY_SEC: " 600 ",
+      }),
+    ).toEqual({ intervalSec: 30, timeoutSec: 120, awaySec: 600 });
   });
 
   it("rejects values that are not positive integers", () => {
@@ -48,6 +58,9 @@ describe("resolveHeartbeatConfig", () => {
       );
       expect(() => resolveHeartbeatConfig({ HEARTBEAT_TIMEOUT_SEC: value })).toThrow(
         /HEARTBEAT_TIMEOUT_SEC/,
+      );
+      expect(() => resolveHeartbeatConfig({ HEARTBEAT_AWAY_SEC: value })).toThrow(
+        /HEARTBEAT_AWAY_SEC/,
       );
     }
   });
@@ -59,6 +72,15 @@ describe("resolveHeartbeatConfig", () => {
     expect(() =>
       resolveHeartbeatConfig({ HEARTBEAT_INTERVAL_SEC: "300", HEARTBEAT_TIMEOUT_SEC: "60" }),
     ).toThrow(/must be greater than HEARTBEAT_INTERVAL_SEC/);
+  });
+
+  it("requires the away window to exceed the timeout", () => {
+    expect(() =>
+      resolveHeartbeatConfig({ HEARTBEAT_TIMEOUT_SEC: "300", HEARTBEAT_AWAY_SEC: "300" }),
+    ).toThrow(/must be greater than HEARTBEAT_TIMEOUT_SEC/);
+    expect(() =>
+      resolveHeartbeatConfig({ HEARTBEAT_TIMEOUT_SEC: "300", HEARTBEAT_AWAY_SEC: "60" }),
+    ).toThrow(/must be greater than HEARTBEAT_TIMEOUT_SEC/);
   });
 });
 

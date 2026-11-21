@@ -59,6 +59,10 @@ describe("poseForStatus", () => {
     }
   });
 
+  it("seats an away bot in the plain idle pose", () => {
+    expect(poseForStatus("away")).toEqual(poseForStatus("idle"));
+  });
+
   it("leans a waiting bot back and gives a reviewer a paper", () => {
     expect(poseForStatus("waiting")?.leanBack).toBeLessThan(0);
     expect(poseForStatus("reviewing")?.paper).toBe(true);

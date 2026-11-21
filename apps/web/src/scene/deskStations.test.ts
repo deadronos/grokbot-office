@@ -71,7 +71,7 @@ describe("plate visibility", () => {
   });
 
   it("shows a plate for every present bot", () => {
-    for (const status of ["idle", "working", "waiting", "reviewing"] as const) {
+    for (const status of ["idle", "working", "waiting", "reviewing", "away"] as const) {
       expect(plateVisible(status)).toBe(true);
     }
   });

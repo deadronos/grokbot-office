@@ -1,10 +1,14 @@
 export type HeartbeatConfig = {
   intervalSec: number;
   timeoutSec: number;
+  /** Silence after which a bot shows `away`; past it the bot goes offline. */
+  awaySec: number;
 };
 
 export const DEFAULT_HEARTBEAT_INTERVAL_SEC = 60;
 export const DEFAULT_HEARTBEAT_TIMEOUT_SEC = 300;
+/** A day of silence is the default line between away and offline. */
+export const DEFAULT_HEARTBEAT_AWAY_SEC = 86_400;
 
 export const DEFAULT_SESSION_TTL_SEC = 28800;
 /** A week: beyond this a viewer cookie outlives any reason to keep it. */
@@ -62,7 +66,17 @@ export function resolveHeartbeatConfig(
       `HEARTBEAT_TIMEOUT_SEC (${timeoutSec}) must be greater than HEARTBEAT_INTERVAL_SEC (${intervalSec})`,
     );
   }
-  return { intervalSec, timeoutSec };
+  const awaySec = positiveInt(
+    env.HEARTBEAT_AWAY_SEC,
+    DEFAULT_HEARTBEAT_AWAY_SEC,
+    "HEARTBEAT_AWAY_SEC",
+  );
+  if (awaySec <= timeoutSec) {
+    throw new Error(
+      `HEARTBEAT_AWAY_SEC (${awaySec}) must be greater than HEARTBEAT_TIMEOUT_SEC (${timeoutSec})`,
+    );
+  }
+  return { intervalSec, timeoutSec, awaySec };
 }
 
 /**

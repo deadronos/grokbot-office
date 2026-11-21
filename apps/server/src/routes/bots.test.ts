@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { MAX_API_BODY_BYTES } from "../app.ts";
 import { issueToken } from "../auth/tokens.ts";
+import type { HeartbeatConfig } from "../config.ts";
 import { botRecord, testSetup } from "../test-utils.ts";
 
 const cleanups: (() => void)[] = [];
@@ -20,7 +21,7 @@ const body = {
 type App = ReturnType<typeof testSetup>["app"];
 const auth = (token: string) => ({ authorization: `Bearer ${token}` });
 
-function setup({ heartbeat }: { heartbeat?: { intervalSec: number; timeoutSec: number } } = {}) {
+function setup({ heartbeat }: { heartbeat?: HeartbeatConfig } = {}) {
   const context = testSetup({ heartbeat });
   cleanups.push(context.close);
   context.repo.upsertBot(botRecord("data"));
@@ -185,6 +186,13 @@ describe("POST /api/bots/:id/heartbeat", () => {
     const reviewing = repo.getBotStatus("data");
     expect(reviewing?.status).toBe("reviewing");
     expect(reviewing?.since).toBe(reviewing?.lastHeartbeatAt);
+  });
+
+  it("rejects a heartbeat that claims away, which only silence can produce", async () => {
+    const { app, repo, dataToken } = setup();
+    const res = await heartbeat(app, "data", dataToken, { status: "away" });
+    expect(res.status).toBe(400);
+    expect(repo.getBotStatus("data")?.status).not.toBe("away");
   });
 
   it("rejects working or waiting heartbeats with 422 and does not change status", async () => {

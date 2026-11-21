@@ -12,27 +12,45 @@ type Clock = () => string;
 /** A stored timestamp `ms` earlier than `now`. */
 const before = (now: string, ms: number): string => toUtc(new Date(Date.parse(now) - ms));
 
+/** One sweep's outcome: what it wrote, and who reads as `away` afterwards. */
+export type SweepResult = {
+  /** Offline events written this sweep. */
+  swept: number;
+  /** Bots that are silent but still inside the away window. */
+  away: Set<string>;
+};
+
 /**
- * Marks bots whose heartbeat is older than `timeoutSec` offline. Events are the only
- * source of work state, so a live bot (even `working`) is never touched; a stale bot
- * loses its links exactly like an `offline` status event. Returns the event count.
+ * Presence housekeeping. A bot silent past `timeoutSec` is `away` (derived in the
+ * snapshot, nothing stored); silent past `awaySec` it goes offline exactly like a
+ * heartbeat timeout, with an `offline` event and its links cleared. Away is not an
+ * event, so a change in the away set asks open streams to refetch the snapshot.
  */
 export function sweepStaleBots({
   repo,
   hub,
   timeoutSec,
+  awaySec,
+  previousAway = new Set<string>(),
   now = nowUtc,
 }: {
   repo: Repo;
   hub: StreamHub;
   timeoutSec: number;
+  awaySec: number;
+  previousAway?: ReadonlySet<string>;
   now?: Clock;
-}): number {
+}): SweepResult {
   const at = now();
-  const swept = repo.sweepStaleBots(before(at, timeoutSec * 1000), at);
+  const swept = repo.sweepStaleBots(before(at, awaySec * 1000), at);
   // Same notify-then-pull path as `POST /api/events`.
   if (swept > 0) hub.notify();
-  return swept;
+  // After the sweep, so a bot that just went offline is not reported as away.
+  const away = new Set(repo.staleOnlineBotIds(before(at, timeoutSec * 1000)));
+  const changed = away.size !== previousAway.size || [...away].some((id) => !previousAway.has(id));
+  // Offline already moved its streams through `notify`; away has no event of its own.
+  if (changed) hub.refresh();
+  return { swept, away };
 }
 
 /** Starts the 15 s sweeper; the returned function clears it (shutdown, tests). */
@@ -40,18 +58,21 @@ export function startHeartbeatSweeper({
   repo,
   hub,
   timeoutSec,
+  awaySec,
   intervalMs = SWEEP_INTERVAL_MS,
   now = nowUtc,
 }: {
   repo: Repo;
   hub: StreamHub;
   timeoutSec: number;
+  awaySec: number;
   intervalMs?: number;
   now?: Clock;
 }): () => void {
+  let away: ReadonlySet<string> = new Set<string>();
   const timer = setInterval(() => {
     try {
-      sweepStaleBots({ repo, hub, timeoutSec, now });
+      away = sweepStaleBots({ repo, hub, timeoutSec, awaySec, previousAway: away, now }).away;
     } catch (error) {
       // One bad sweep must not take the server down; the next tick retries.
       console.error("heartbeat sweep failed", error);
