@@ -10,6 +10,7 @@ import { DESK_STATIONS, type DeskStation } from "./deskStations";
 import {
   PACKET_SIZE,
   consumedSeqAtFirstRun,
+  consumedSeqOnHistoryExit,
   deskStation,
   liveSendsFromEvents,
   packetPose,
@@ -51,6 +52,7 @@ export function useHandoffPackets(reducedMotion: boolean): {
     // A mode switch starts from a clean packet set, so no live flight survives
     // into the replay (or the other way round).
     const previous = modeRef.current === mode ? packetsRef.current : [];
+    const leavingHistory = modeRef.current === "history" && mode === "live";
     modeRef.current = mode;
 
     if (active) {
@@ -74,13 +76,20 @@ export function useHandoffPackets(reducedMotion: boolean): {
     }
 
     // Seed from the snapshot: a send that arrived while this chunk loaded is
-    // newer than `snapshotSeq` and must still fly.
-    const lastConsumedSeq = consumedSeqAtFirstRun({
-      consumed: consumedSeqRef.current,
-      snapshotSeq: state.snapshotSeq,
-      lastEventSeq: state.lastEventSeq,
-      newestEventSeq,
-    });
+    // newer than `snapshotSeq` and must still fly. Coming back from history, a
+    // send that landed meanwhile is already seen (it is in `newestEventSeq`).
+    const lastConsumedSeq = leavingHistory
+      ? consumedSeqOnHistoryExit({
+          consumed: consumedSeqRef.current,
+          lastEventSeq: state.lastEventSeq,
+          newestEventSeq,
+        })
+      : consumedSeqAtFirstRun({
+          consumed: consumedSeqRef.current,
+          snapshotSeq: state.snapshotSeq,
+          lastEventSeq: state.lastEventSeq,
+          newestEventSeq,
+        });
     const live = liveSendsFromEvents({
       events: state.events,
       lastConsumedSeq,

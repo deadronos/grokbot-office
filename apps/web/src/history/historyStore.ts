@@ -31,6 +31,8 @@ export type HistoryStore = {
   events: StreamEvent[];
   /** Selected day's events, the timeline the playhead indexes into. */
   dayEvents: StreamEvent[];
+  /** Loaded events before the selected day (oldest first); seeds its replay. */
+  dayStartEvents: StreamEvent[];
   /** Index into `dayEvents`; `-1` is before the day's first event. */
   playhead: number;
   playing: boolean;
@@ -60,6 +62,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => {
     roster: [],
     events: [],
     dayEvents: [],
+    dayStartEvents: [],
     playhead: -1,
     playing: false,
     loading: false,
@@ -78,6 +81,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => {
         roster,
         events: [],
         dayEvents: [],
+        dayStartEvents: [],
         playhead: -1,
         playing: false,
         loading: true,
@@ -132,10 +136,14 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => {
             (a, b) =>
               Date.parse(a.receivedAt ?? a.at) - Date.parse(b.receivedAt ?? b.at) || a.seq - b.seq,
           );
+        // Earlier days in the loaded window seed the roster; the day itself
+        // starts from its own first event.
+        const dayStartEvents = events.filter((event) => eventDayKey(event) < day);
         const playhead = dayEvents.length - 1;
         set({
           events,
           dayEvents,
+          dayStartEvents,
           playhead,
           loading: false,
           replay: replayState({
@@ -143,6 +151,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => {
             events: dayEvents,
             playhead,
             dayStart: localDayBounds(day).from,
+            before: dayStartEvents,
           }),
           stats: computeStats({
             events,
@@ -161,7 +170,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => {
     },
 
     setPlayhead: (index) => {
-      const { dayEvents, roster, day } = get();
+      const { dayEvents, dayStartEvents, roster, day } = get();
       const playhead =
         dayEvents.length === 0 ? -1 : Math.min(Math.max(index, 0), dayEvents.length - 1);
       if (playhead === get().playhead) return;
@@ -174,6 +183,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => {
           events: dayEvents,
           playhead,
           dayStart: localDayBounds(day).from,
+          before: dayStartEvents,
         }),
       });
       invalidateScene();

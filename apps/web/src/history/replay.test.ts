@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BotSnapshot, StreamEvent } from "@grokbot-office/shared";
 
+import { fetchEventsWindow, type HistoryPage } from "./historyApi";
 import { replayRoster, replayState, REPLAY_FEED_LIMIT } from "./replay";
 
 const DAY_START = "2026-01-15T05:00:00.000Z";
@@ -110,7 +111,7 @@ describe("history replay", () => {
     expect(state.events.at(-1)?.seq).toBe(events.length);
   });
 
-  it("replays the day's maximum 2000 events within a coarse budget", () => {
+  it("reduces the day's maximum 2000 events within a coarse budget", () => {
     const events: StreamEvent[] = [];
     for (let index = 0; index < 2000; index += 1) {
       const botId = index % 2 === 0 ? "data" : "wesley";
@@ -127,4 +128,94 @@ describe("history replay", () => {
     expect(state.lastEventSeq).toBe(2000);
     expect(elapsed, `replay took ${elapsed.toFixed(0)}ms`).toBeLessThan(2000);
   });
+
+  it("loads and replays the day's maximum 2000 events within two seconds", async () => {
+    const day: StreamEvent[] = [];
+    const base = Date.parse("2026-01-15T09:00:00.000Z");
+    for (let index = 0; index < 2000; index += 1) {
+      const botId = index % 2 === 0 ? "data" : "wesley";
+      const taskId = `task-${index}`;
+      const receivedAt = new Date(base + index * 1000).toISOString();
+      day.push(
+        index % 3 === 0
+          ? { seq: index + 1, receivedAt, botId, type: "task_finished", taskId, result: "done" }
+          : { seq: index + 1, receivedAt, botId, type: "task_started", taskId, label: "Chunk" },
+      );
+    }
+    // The real page shape and page size: four full pages of 500, no network.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const since = Number(new URL(input, "http://office.test").searchParams.get("since"));
+        const events = day.slice(since, since + 500);
+        const body: HistoryPage = {
+          events,
+          nextSince: since + events.length,
+          hasMore: since + events.length < day.length,
+          lastSeq: day.length,
+        };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const started = performance.now();
+    const loaded = await fetchEventsWindow({
+      from: "2026-01-15T05:00:00.000Z",
+      to: "2026-01-16T05:00:00.000Z",
+    });
+    const state = replayState({
+      roster,
+      events: loaded,
+      playhead: loaded.length - 1,
+      dayStart: DAY_START,
+    });
+    const elapsed = performance.now() - started;
+    expect(loaded).toHaveLength(2000);
+    expect(state.lastEventSeq).toBe(2000);
+    expect(elapsed, `load + replay took ${elapsed.toFixed(0)}ms`).toBeLessThan(2000);
+  });
+});
+
+describe("as-of day start", () => {
+  const EVENING = "2026-01-14T22:00:00.000Z";
+
+  it("starts a bot that went offline before the day as offline", () => {
+    const before: StreamEvent[] = [
+      { seq: 7, receivedAt: EVENING, botId: "wesley", type: "offline" },
+    ];
+    const state = replayState({
+      roster,
+      before,
+      events: [],
+      playhead: -1,
+      dayStart: DAY_START,
+    });
+
+    expect(state.bots.wesley).toMatchObject({ status: "offline", since: EVENING });
+    // No earlier event: it still starts idle at the day's start.
+    expect(state.bots.data).toMatchObject({ status: "idle", since: DAY_START });
+    // Seed events never reach the day's feed.
+    expect(state.events).toEqual([]);
+  });
+
+  it("lays the day's events on top of the seeded status", () => {
+    const before: StreamEvent[] = [
+      { seq: 7, receivedAt: EVENING, botId: "wesley", type: "offline" },
+    ];
+    const events = [
+      event(1, { botId: "data", type: "task_started", taskId: "t1", label: "Build" }),
+    ];
+    const state = replayState({ roster, before, events, playhead: 0, dayStart: DAY_START });
+
+    expect(state.bots.data.status).toBe("working");
+    expect(state.bots.wesley.status).toBe("offline");
+    expect(state.events.map((entry) => entry.seq)).toEqual([1]);
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });

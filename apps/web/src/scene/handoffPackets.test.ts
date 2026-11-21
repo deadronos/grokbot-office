@@ -7,6 +7,7 @@ import {
   PACKET_FLIGHT_MS,
   PACKET_PICKUP_MS,
   consumedSeqAtFirstRun,
+  consumedSeqOnHistoryExit,
   liveSendsFromEvents,
   packetPhase,
   packetPose,
@@ -382,6 +383,48 @@ describe("first-run seq seed", () => {
         newestEventSeq: 7,
       }),
     ).toBe(7);
+  });
+});
+
+describe("history exit seq seed", () => {
+  it("does not fly a send that landed while history was open", () => {
+    // History opened at seq 5; the live send at 6 reached the store meanwhile,
+    // so the live open handoff it created must stay a tray packet.
+    const seed = consumedSeqOnHistoryExit({ consumed: 5, lastEventSeq: 6, newestEventSeq: 6 });
+    expect(seed).toBe(6);
+
+    const { liveSends } = liveSendsFromEvents({
+      events: [sentEvent(6, "data", "wesley", "h1")],
+      lastConsumedSeq: seed,
+      now: 900,
+      reducedMotion: false,
+    });
+    expect(liveSends.size).toBe(0);
+    const packets = syncPackets({
+      previous: [],
+      openHandoffs: [handoff("h1", "data", "wesley")],
+      liveSends,
+      now: 900,
+      reducedMotion: false,
+    });
+    expect(packets[0]?.sentAt).toBeNull();
+  });
+
+  it("still flies a send that arrives after the exit", () => {
+    const seed = consumedSeqOnHistoryExit({ consumed: 5, lastEventSeq: 6, newestEventSeq: 6 });
+    const { liveSends } = liveSendsFromEvents({
+      events: [sentEvent(6, "data", "wesley", "h1"), sentEvent(7, "data", "wesley", "h2")],
+      lastConsumedSeq: seed,
+      now: 900,
+      reducedMotion: false,
+    });
+    expect([...liveSends.keys()]).toEqual(["h2"]);
+  });
+
+  it("counts a snapshot past the feed as seen", () => {
+    expect(consumedSeqOnHistoryExit({ consumed: null, lastEventSeq: 9, newestEventSeq: 4 })).toBe(
+      9,
+    );
   });
 });
 

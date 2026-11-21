@@ -540,8 +540,10 @@ own work.
 `GET /api/events?since={seq}&limit={n}` replays the log: events with `seq > since`
 ascending, at most `limit` of them (`since` defaults to 0, `limit` to 100, maximum
 500). Values are plain decimal integers without leading zeros (`since=00` and
-`limit=03` are refused). Unknown, repeated or malformed parameters get
-`400 {"error":"invalid query"}`.
+`limit=03` are refused). `from` and `to` (ISO instants) narrow the log to the
+half-open `[from, to)` window; a window wider than eight days (the viewer reads
+seven local days plus DST slack) is refused the same way. Unknown, repeated or
+malformed parameters get `400 {"error":"invalid query"}`.
 Each event is a `StreamEvent`: `to` is a handoff's target bot, `at` the clamped client
 time and `receivedAt` the server time.
 

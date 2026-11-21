@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { StreamEvent } from "@grokbot-office/shared";
+import { APP_NAME, type StreamEvent } from "@grokbot-office/shared";
 
+import { APP_TITLE_LAYOUT, historyBarBox } from "../hudLayout";
 import { HistoryBarView, type HistoryBarViewProps } from "./HistoryBar";
 import type { HistoryStats } from "./stats";
 
@@ -84,5 +89,41 @@ describe("HistoryBarView", () => {
     expect(markup).toContain('aria-label="Pause"');
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("History request failed (503).");
+  });
+});
+
+describe("short-window dock", () => {
+  it("sits beside the app title instead of covering it", () => {
+    const viewport = { width: 844, height: 390 };
+    const box = historyBarBox(viewport);
+    const markup = renderToStaticMarkup(
+      <>
+        <h1 className="app-title">{APP_NAME}</h1>
+        <HistoryBarView
+          {...props()}
+          style={{ left: box.x0, top: box.y0, width: box.x1 - box.x0, height: box.y1 - box.y0 }}
+        />
+      </>,
+    );
+
+    const barStyle = /<aside class="history-bar" style="([^"]*)"/.exec(markup)?.[1] ?? "";
+    const style = Object.fromEntries(
+      barStyle
+        .split(";")
+        .map((pair) => pair.split(":").map((part) => part.trim()))
+        .map(([property, value]) => [property, Number.parseFloat(value ?? "")]),
+    );
+    expect(style.left).toBeGreaterThanOrEqual(APP_TITLE_LAYOUT.left + APP_TITLE_LAYOUT.width);
+    // The dock shares the title's top band but starts to its right, so the x gap
+    // alone keeps it clear of the title (the suite has no layout engine).
+    expect(style.top).toBeLessThan(APP_TITLE_LAYOUT.top + APP_TITLE_LAYOUT.height);
+    expect((style.width ?? 0) + (style.left ?? 0)).toBeLessThanOrEqual(viewport.width);
+
+    // The constants mirror the fixed title rule; keep them honest.
+    const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+    const css = readFileSync(join(root, "src/styles.css"), "utf8");
+    const titleRule = css.slice(css.indexOf(".app-title {")).split("}")[0] ?? "";
+    expect(titleRule).toContain(`top: ${APP_TITLE_LAYOUT.top / 16}rem`);
+    expect(titleRule).toContain(`left: ${APP_TITLE_LAYOUT.left / 16}rem`);
   });
 });

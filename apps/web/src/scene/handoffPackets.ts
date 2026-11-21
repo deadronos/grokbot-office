@@ -195,6 +195,19 @@ export function consumedSeqAtFirstRun(input: {
 }
 
 /**
+ * The seq treated as seen when history closes. A send that landed while the
+ * replay was open is already in the store, so flying it on return would animate
+ * an old handoff; only sends after this seq are live.
+ */
+export function consumedSeqOnHistoryExit(input: {
+  consumed: number | null;
+  lastEventSeq: number;
+  newestEventSeq: number;
+}): number {
+  return Math.max(input.consumed ?? 0, input.lastEventSeq, input.newestEventSeq);
+}
+
+/**
  * Live `handoff_sent` events newer than `lastConsumedSeq`, keyed by handoff id.
  * Ids come from the events, never from a `{from,to}` flash: a replay batch can
  * carry several sends for one pair, and a snapshot's own sends are not live.

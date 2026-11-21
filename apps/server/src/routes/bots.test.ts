@@ -173,6 +173,24 @@ describe("POST /api/bots/register", () => {
     expect(Date.parse(status?.lastHeartbeatAt ?? "")).toBeGreaterThan(Date.parse(old));
   });
 
+  it("records an explicit offline heartbeat as an offline event history can replay", async () => {
+    const { app, repo, dataToken } = setup();
+    expect((await heartbeat(app, "data", dataToken, { status: "reviewing" })).status).toBe(204);
+    expect((await heartbeat(app, "data", dataToken, { status: "offline" })).status).toBe(204);
+
+    const offline = repo.listEventsSince(0).filter((row) => row.type === "offline");
+    expect(offline).toHaveLength(1);
+    expect(offline[0]).toMatchObject({ botId: "data", status: "offline" });
+    expect(repo.getBotStatus("data")).toMatchObject({
+      status: "offline",
+      lastEventSeq: offline[0]?.seq,
+    });
+
+    // A second offline heartbeat has nothing new to replay.
+    expect((await heartbeat(app, "data", dataToken, { status: "offline" })).status).toBe(204);
+    expect(repo.listEventsSince(offline[0]?.seq ?? 0)).toEqual([]);
+  });
+
   it("refuses a token bound to another bot", async () => {
     const { app, wesleyToken, dataToken } = setup();
     const res = await register(app, wesleyToken, body);

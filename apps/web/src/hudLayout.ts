@@ -1,3 +1,5 @@
+import { APP_NAME } from "@grokbot-office/shared";
+
 import type { ScreenRect } from "./scene/screenBox";
 
 export type Viewport = { width: number; height: number };
@@ -14,6 +16,22 @@ export const HUD_LAYOUT = {
 export type HudVariant = "wide" | "narrow";
 
 /** Bottom (or top-left on short screens) history dock, with room for stats. */
+const TITLE_FONT_PX = 16 * 0.9;
+/**
+ * `.app-title`'s fixed footprint in `styles.css`: `top: 1rem; left: 1.25rem`, one
+ * `0.9rem` line drawn uppercase with `letter-spacing: 0.1em`. A sans uppercase
+ * glyph advances at most ~0.8em, so this box covers `APP_NAME` (14 glyphs) plus a
+ * pad; the short-viewport dock starts to its right instead of guessing.
+ */
+export const APP_TITLE_LAYOUT = {
+  top: 16,
+  left: 20,
+  width:
+    Math.ceil(APP_NAME.length * TITLE_FONT_PX * 0.8 + (APP_NAME.length - 1) * TITLE_FONT_PX * 0.1) +
+    8,
+  height: 20,
+} as const;
+
 export const HISTORY_LAYOUT = {
   barHeight: 96,
   gap: 8,
@@ -47,12 +65,14 @@ export function hudScreenBox({ width, height }: Viewport): ScreenRect {
 /**
  * History bar placement. Normally it docks at the bottom: left of the wide HUD,
  * above the narrow one. Short windows put it at the top-left instead, where the
- * projected desks still leave room.
+ * projected desks still leave room, but below the fixed app title.
  */
 export function historyBarBox({ width, height }: Viewport): ScreenRect {
   const { barHeight, gap, wideWidth, shortMaxHeight, shortWidth, inset } = HISTORY_LAYOUT;
   if (height <= shortMaxHeight) {
-    const left = inset;
+    // Beside the app title, not under it: the top band is the only space the
+    // projected desks leave free, and a full-width dock would cover the title.
+    const left = APP_TITLE_LAYOUT.left + APP_TITLE_LAYOUT.width + inset;
     return {
       x0: left,
       x1: Math.min(width - inset, left + shortWidth),

@@ -99,7 +99,9 @@ So a quiet bot looks dimmed at its desk rather than gone. Any report — a
 keep-alive heartbeat with no status, an event, or a re-register — restores the
 stored status with no extra event. An explicit `offline` (a heartbeat with
 `status: "offline"`, or a `status_changed` event) is never shown as `away`; it
-stays offline until the bot reports again, and then ages normally. Coming back from
+writes one `offline` event, the same row the silence sweep writes, so history can
+replay when the bot went offline. It stays offline until the bot reports again,
+and then ages normally. Coming back from
 `away` stores no event, so the server asks open viewers to refetch the snapshot
 instead of making them wait for the next sweep.
 

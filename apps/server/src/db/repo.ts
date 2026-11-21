@@ -116,7 +116,8 @@ export interface Repo {
   /**
    * Refreshes the heartbeat and applies its status per `heartbeatPatch` (it cannot end
    * derived working/waiting except with `offline`); `since` resets only on a change.
-   * Returns true when an offline bot came back online (a `status_changed` event was written).
+   * Returns true when presence moved (a `status_changed` on the way back online, or the
+   * same `offline` event the sweeper writes on the way out) so history can replay it.
    */
   touchHeartbeat(botId: string, status: Status["status"] | undefined, now: string): boolean;
   getBot(id: string): Bot | undefined;
@@ -364,16 +365,19 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
             .run();
           return false;
         }
-        // Leaving offline is visible to viewers: one status_changed, then notify.
+        // A presence change is visible to viewers and needs one event for history:
+        // a status_changed on the way back online, or the same `offline` event the
+        // sweeper writes, so the log marks an explicit offline the same way.
         const cameOnline = existing.status === "offline";
+        const wentOffline = patch.status === "offline";
         let lastSeq = existing.lastEventSeq;
-        if (cameOnline) {
+        if (cameOnline || wentOffline) {
           const inserted = tx
             .insert(events)
             .values({
               eventId: randomUUID(),
               botId,
-              type: "status_changed",
+              type: wentOffline ? "offline" : "status_changed",
               status: patch.status ?? "idle",
               receivedAt: now,
             })
@@ -385,7 +389,7 @@ export function createSqliteRepo(sqlite: Database.Database): Repo {
           .set({ ...patch, since: now, lastHeartbeatAt: now, lastEventSeq: lastSeq })
           .where(eq(botStatus.botId, botId))
           .run();
-        return cameOnline;
+        return cameOnline || wentOffline;
       }),
     getBot: (id) => db.select().from(bots).where(eq(bots.id, id)).get(),
     listBots: () => db.select().from(bots).all(),
