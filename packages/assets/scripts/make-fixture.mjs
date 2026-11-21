@@ -1,15 +1,18 @@
-// Regenerates test/fixtures/duplicate.glb: two meshes with identical (but
-// separately stored) geometry, plus a 1024px texture, so the pipeline test can
-// observe dedupe and texture resizing without network access.
+// Writes duplicate.glb: two meshes with identical (but separately stored)
+// geometry, plus a 128px texture, so the pipeline test can observe dedupe and
+// texture resizing without network access. The test generates it into a tmp dir
+// at run time; by hand: `node scripts/make-fixture.mjs [out.glb]`.
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Document, NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import sharp from "sharp";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures/duplicate.glb");
+const EDGE = 128;
+const OUT =
+  process.argv[2] ?? fileURLToPath(new URL("../../../assets/cache/duplicate.glb", import.meta.url));
 
 const document = new Document();
 const buffer = document.createBuffer();
@@ -17,17 +20,17 @@ const scene = document.createScene();
 
 // Non-solid pixels: prune() removes solid-color textures, which would hide
 // whether the texture resize step actually ran.
-const pixels = Buffer.alloc(1024 * 1024 * 4);
-for (let y = 0; y < 1024; y++) {
-  for (let x = 0; x < 1024; x++) {
-    const i = (y * 1024 + x) * 4;
+const pixels = Buffer.alloc(EDGE * EDGE * 4);
+for (let y = 0; y < EDGE; y++) {
+  for (let x = 0; x < EDGE; x++) {
+    const i = (y * EDGE + x) * 4;
     pixels[i] = x & 0xff;
     pixels[i + 1] = y & 0xff;
     pixels[i + 2] = (x ^ y) & 0xff;
     pixels[i + 3] = 255;
   }
 }
-const png = await sharp(pixels, { raw: { width: 1024, height: 1024, channels: 4 } })
+const png = await sharp(pixels, { raw: { width: EDGE, height: EDGE, channels: 4 } })
   .png()
   .toBuffer();
 const texture = document.createTexture("palette").setImage(png).setMimeType("image/png");

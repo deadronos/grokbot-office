@@ -9,7 +9,7 @@
 // Source packs are cached in the gitignored assets/cache/. Requires `unzip`.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -72,6 +72,10 @@ async function download({ slug }) {
 async function ensurePack(pack) {
   const zipPath = join(CACHE, `${pack.slug}.zip`);
   const dir = join(CACHE, pack.slug);
+  // Written inside the extract dir after a successful unzip, so a stale extract
+  // (or one made from an older zip) is detected and redone.
+  const marker = join(dir, ".sha256");
+  let downloaded = false;
   try {
     const actual = createHash("sha256")
       .update(await readFile(zipPath))
@@ -89,11 +93,18 @@ async function ensurePack(pack) {
       );
     }
     await writeFile(zipPath, bytes);
+    downloaded = true;
   }
-  try {
-    await stat(dir);
-  } catch {
+  const extracted =
+    !downloaded &&
+    (await readFile(marker, "utf8").then(
+      (value) => value.trim() === pack.sha256,
+      () => false,
+    ));
+  if (!extracted) {
+    await rm(dir, { recursive: true, force: true });
     await run("unzip", ["-q", "-o", zipPath, "-d", dir]);
+    await writeFile(marker, `${pack.sha256}\n`);
   }
 }
 

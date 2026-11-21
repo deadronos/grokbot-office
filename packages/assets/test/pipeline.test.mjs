@@ -1,19 +1,35 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TEXTURE_MAX, processGlb } from "../src/pipeline.mjs";
 import { readGlb, textureSize } from "./glb.mjs";
 
-const FIXTURE = fileURLToPath(new URL("./fixtures/duplicate.glb", import.meta.url));
+const SCRIPT = fileURLToPath(new URL("../scripts/make-fixture.mjs", import.meta.url));
+const FIXTURE_EDGE = 128;
 const MODELS = fileURLToPath(new URL("../../../apps/web/public/assets/models/", import.meta.url));
 
 const temps = [];
+let fixtureDir;
+let FIXTURE;
+
+beforeAll(async () => {
+  fixtureDir = await mkdtemp(join(tmpdir(), "grokbot-fixture-"));
+  FIXTURE = join(fixtureDir, "duplicate.glb");
+  await promisify(execFile)(process.execPath, [SCRIPT, FIXTURE]);
+});
+
 afterEach(async () => {
   for (const dir of temps.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+
+afterAll(async () => {
+  await rm(fixtureDir, { recursive: true, force: true });
 });
 
 async function processFixture(options) {
@@ -28,17 +44,17 @@ describe("processGlb", () => {
   it("dedupes, resizes textures and applies meshopt compression", async () => {
     const input = readGlb(FIXTURE);
     expect(input.json.images).toHaveLength(1);
-    expect(textureSize(input).width).toBe(1024);
+    expect(textureSize(input).width).toBe(FIXTURE_EDGE);
     // Two meshes worth of duplicate position/index accessors plus distinct UVs.
     expect(input.json.accessors).toHaveLength(6);
 
-    const output = await processFixture({ textureMax: 256 });
+    const output = await processFixture({ textureMax: 64 });
 
     expect(output.json.extensionsUsed).toContain("EXT_meshopt_compression");
     expect(output.json.extensionsUsed).toContain("KHR_mesh_quantization");
     expect(output.json.accessors.length).toBeLessThan(input.json.accessors.length);
     expect(output.json.meshes).toHaveLength(2);
-    expect(textureSize(output)).toEqual({ width: 256, height: 256 });
+    expect(textureSize(output)).toEqual({ width: 64, height: 64 });
     const compressed = (output.json.bufferViews ?? []).some(
       (view) => view.extensions?.EXT_meshopt_compression,
     );
