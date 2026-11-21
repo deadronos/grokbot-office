@@ -276,6 +276,34 @@ canvas {
   white-space: nowrap;
 }
 
+/* Bot rows are buttons, so they are the keyboard path into the details panel. */
+.hud-bot {
+  width: 100%;
+  margin: 0;
+  padding: 0.1rem 0.2rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.hud-bot:hover {
+  background: rgb(244 246 251 / 8%);
+}
+
+.hud-bot:focus-visible {
+  outline: 2px solid #7f9cf5;
+  outline-offset: 1px;
+}
+
+.hud-bot[aria-current="true"] {
+  background: rgb(127 156 245 / 18%);
+}
+
 .hud-name {
   font-weight: 600;
 }
@@ -345,4 +373,112 @@ canvas {
 
 .hud-credit a {
   color: inherit;
+}
+
+/* Details panel: an HTML overlay beside the HUD, so it stays accessible and crisp. */
+.details-panel {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 2;
+  top: 3.25rem;
+  left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(24rem, calc(100vw - 2.5rem));
+  max-height: calc(100vh - 11rem);
+  padding: 0.85rem 1rem;
+  overflow-y: auto;
+  border: 1px solid rgb(244 246 251 / 18%);
+  border-radius: 0.5rem;
+  background: rgb(10 13 19 / 92%);
+  box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 45%);
+  font-size: 0.8rem;
+}
+
+.details-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.details-name {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.details-close {
+  margin-left: auto;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid #8b93a1;
+  border-radius: 999px;
+  background: transparent;
+  color: #f4f6fb;
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.details-close:hover,
+.details-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid #f4f6fb;
+  outline-offset: 2px;
+}
+
+.details-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.details-fact {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.details-fact dt {
+  min-width: 4rem;
+  color: #aab2c0;
+}
+
+.details-fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.details-heading {
+  margin: 0 0 0.25rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.details-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.details-item {
+  display: flex;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.details-label {
+  opacity: 0.8;
+}
+
+.details-empty {
+  margin: 0;
+  opacity: 0.5;
 }

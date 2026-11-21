@@ -59,6 +59,8 @@ type OfficeData = {
   events: StreamEvent[];
   /** Set by a live handoff_sent, cleared by the scene after its flash. */
   handoffFlash: { seq: number; from: string; to: string } | null;
+  /** Viewer-only details selection; never sent to the server. */
+  selectedBotId: string | null;
 };
 
 export type OfficeStore = OfficeData & {
@@ -73,6 +75,8 @@ export type OfficeStore = OfficeData & {
   applyEvent: (event: StreamEvent) => void;
   seedEvents: (events: StreamEvent[]) => void;
   clearHandoffFlash: () => void;
+  selectBot: (botId: string) => void;
+  clearSelectedBot: () => void;
   expire: () => void;
   startStream: () => () => void;
   pageUnloading: boolean;
@@ -87,6 +91,7 @@ const EMPTY_DATA: OfficeData = {
   lastEventSeq: 0,
   events: [],
   handoffFlash: null,
+  selectedBotId: null,
 };
 
 let closedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -237,6 +242,11 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
           (event) => visible.has(event.botId) && (event.to === undefined || visible.has(event.to)),
         ),
       ),
+      // A selection only lives while its bot is in the snapshot.
+      selectedBotId:
+        state.selectedBotId !== null && visible.has(state.selectedBotId)
+          ? state.selectedBotId
+          : null,
     }));
     invalidateScene();
   },
@@ -250,6 +260,11 @@ export const useOfficeStore = create<OfficeStore>()((set, get) => ({
   },
 
   clearHandoffFlash: () => set({ handoffFlash: null }),
+
+  // Only a bot in the snapshot gets a panel; a click on an absent desk is a no-op.
+  selectBot: (botId) => set({ selectedBotId: get().bots[botId] ? botId : null }),
+
+  clearSelectedBot: () => set({ selectedBotId: null }),
 
   applyEvent: (event) => {
     const state = get();

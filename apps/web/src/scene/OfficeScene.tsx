@@ -15,6 +15,7 @@ import {
   type Placement,
 } from "./deskStations";
 import { HandoffPackets, useHandoffPackets } from "./HandoffPacketLayer";
+import { deskClickSelects } from "./deskPick";
 import { packetsAnimating } from "./handoffPackets";
 import { setSceneInvalidator } from "./invalidateScene";
 import { ModelBoundary } from "./ModelBoundary";
@@ -285,6 +286,28 @@ function DeskVitals() {
   );
 }
 
+/** Invisible boxes over each desk body: a still click selects its bot, an orbit drag does not. */
+function DeskPicker() {
+  return (
+    <group>
+      {DESK_STATIONS.map((station) => (
+        <mesh
+          key={station.desk.botId}
+          position={station.deskBody.position}
+          rotation={[0, station.deskBody.rotationY, 0]}
+          onClick={(event) => {
+            if (!deskClickSelects(event.delta)) return;
+            useOfficeStore.getState().selectBot(station.desk.botId);
+          }}
+        >
+          <boxGeometry args={[1.8, 0.8, 0.95]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 /** Drops the scene to the WebGL fallback when the context is lost. */
 function WebGlContextGuard({ onContextLost }: { onContextLost?: () => void }) {
   const gl = useThree((state) => state.gl);
@@ -340,6 +363,7 @@ export default function OfficeScene({ onContextLost }: { onContextLost?: () => v
         </Suspense>
       </ModelBoundary>
       <DeskVitals />
+      <DeskPicker />
       <Characters reducedMotion={reducedMotion} />
       <HandoffPackets packets={packets} settle={settle} reducedMotion={reducedMotion} />
       <OrbitControls

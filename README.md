@@ -10,8 +10,9 @@ web app. The web app signs a viewer in, keeps a zustand store in sync with the
 server (`GET /api/state` plus the SSE stream) and renders the static office scene:
 nine fixed desks, a low-poly bot per desk and name plates. Status visuals (desk colour,
 thought bubble, magnifier, dimming), the HUD bot list and event feed, and the handoff
-packet flying into each desk's inbox tray are wired to live store state; the bot
-details panel remains a later issue.
+packet flying into each desk's inbox tray are wired to live store state. Clicking a bot
+in the HUD list or its desk opens a details panel (role, current task, open handoffs and
+the bot's last ten feed events); Escape or Close dismisses it.
 
 ## Stack
 
@@ -98,7 +99,13 @@ Canvas redraws. A `bot_registered` event for a bot that was not in the snapshot
 refetches `GET /api/state`, because the frame does not carry name, role, avatar or pod.
 A `status_changed` event without a `label` keeps the current one while the bot is
 working or waiting, and clears it when the event comes to rest (`idle`/`offline`).
-The HUD list (desk order) and event feed (newest 20) render as text only, and a
+The HUD list (desk order) and event feed (newest 20) render as text only. Every bot row
+is a button: clicking it (or the bot's desk in the scene) opens the details panel, which
+shows name, role, status, the current task label and id, the open handoffs in and out,
+and that bot's newest ten feed events. It only covers bots in the viewer snapshot, so a
+hidden bot has no row and no panel, and it uses the existing feed rather than a new
+request. Escape or its Close button dismisses it, and focus returns to the row it opened
+from. A
 handoff sets a `handoffFlash`, and the scene turns it into a packet that arcs from
 the sender's desk into the receiver's inbox tray in 1.2 s (`PACKET_FLIGHT_MS`); the
 tray shows that bot's open-handoff count, several packets stack in one tray, and an
