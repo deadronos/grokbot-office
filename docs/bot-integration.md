@@ -195,6 +195,9 @@ sanitizing) and 120 for `ref`.
 `BO_URL`, `BO_TOKEN` and `BO_BOT_ID` from the environment and never prints the
 token or puts it on a command line.
 
+A bot-facing skill with the short version — when to report, labels, skipping
+when unset — is at [`skill/bot-office-report.md`](skill/bot-office-report.md).
+
 | Command                                       | Event / route                                                        |
 | --------------------------------------------- | -------------------------------------------------------------------- |
 | `bo.sh register [name] [role] [avatar] [pod]` | `POST /api/bots/register`                                            |

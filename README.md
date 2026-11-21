@@ -200,6 +200,8 @@ at someone else's desk. Bots outside the layout are HUD-list only and take `--po
 [docs/bot-integration.md](docs/bot-integration.md) is the bot-facing guide, and
 [scripts/bo.sh](scripts/bo.sh) wraps every call below in one line for bots
 (`bo.sh start "issue-14"`, `bo.sh handoff wesley "review docs"`).
+Bots can follow [docs/skill/bot-office-report.md](docs/skill/bot-office-report.md)
+for the short, opt-in version.
 
 Bots authenticate with their own bot token and may only act for that bot id: a
 token bound elsewhere gets `403`, any missing/unknown/revoked token gets `401`.
