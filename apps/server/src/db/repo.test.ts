@@ -235,6 +235,45 @@ describe("SQLite repository", () => {
     });
   });
 
+  it("writes one offline event when a heartbeat takes a bot offline", () => {
+    const { repo } = setup();
+    repo.upsertBot(bot("a"));
+    const busy = "2026-01-02T00:00:00.000Z";
+    const offlineAt = "2026-01-03T00:00:00.000Z";
+    const laterOffline = "2026-01-04T00:00:00.000Z";
+    repo.touchHeartbeat("a", "reviewing", busy);
+
+    expect(repo.touchHeartbeat("a", "offline", offlineAt)).toBe(true);
+    const written = repo.listEventsSince(0);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      botId: "a",
+      type: "offline",
+      status: "offline",
+      receivedAt: offlineAt,
+    });
+    expect(repo.getBotStatus("a")).toMatchObject({
+      status: "offline",
+      since: offlineAt,
+      lastEventSeq: written[0]?.seq,
+    });
+
+    // Already offline: nothing new to tell viewers, and no second event.
+    expect(repo.touchHeartbeat("a", "offline", laterOffline)).toBe(false);
+    expect(repo.listEventsSince(written[0]?.seq ?? 0)).toEqual([]);
+  });
+
+  it("writes no event for a heartbeat that only refreshes last-seen", () => {
+    const { repo } = setup();
+    repo.upsertBot(bot("a"));
+    const later = "2026-01-02T00:00:00.000Z";
+
+    expect(repo.touchHeartbeat("a", undefined, later)).toBe(false);
+    expect(repo.touchHeartbeat("a", "idle", later)).toBe(false);
+    expect(repo.listEventsSince(0)).toEqual([]);
+    expect(repo.getBotStatus("a")).toMatchObject({ status: "idle", lastHeartbeatAt: later });
+  });
+
   it("does not bring an offline bot back on a working or waiting heartbeat", () => {
     const { repo } = setup();
     repo.upsertBot(bot("a"));

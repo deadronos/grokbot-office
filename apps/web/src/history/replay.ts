@@ -49,17 +49,27 @@ export function replayRoster(
 /**
  * Rebuilds the office as it looked after `events[playhead]`. `playhead` is an
  * index into the day's events, so `-1` is the moment before the first event.
+ *
+ * `before` is the loaded part of the stats window that precedes the day (oldest
+ * first). It seeds each bot from its last known event, so one that went offline
+ * the evening before starts the day offline instead of idle. An explicit `offline`
+ * heartbeat writes the same event the sweeper does, so it is in the log too. A bot
+ * with no loaded earlier event still starts idle: a day, or a status, older than the
+ * loaded window approximates presence rather than inventing `away`, and there is no
+ * as-of endpoint to ask.
  */
 export function replayState({
   roster,
   events,
   playhead,
   dayStart,
+  before = [],
 }: {
   roster: readonly BotSnapshot[];
   events: readonly StreamEvent[];
   playhead: number;
   dayStart: string;
+  before?: readonly StreamEvent[];
 }): ReplayState {
   let data: OfficeReduceState = {
     bots: replayRoster(roster, dayStart),
@@ -68,6 +78,9 @@ export function replayState({
     events: [],
     handoffFlash: null,
   };
+  for (const event of before) data = reduceOfficeEvent(data, event);
+  // The feed is the day's own events; the seed only sets the starting point.
+  data = { ...data, events: [], handoffFlash: null };
   const end = Math.min(Math.max(playhead + 1, 0), events.length);
   for (let index = 0; index < end; index += 1) {
     data = reduceOfficeEvent(data, events[index]);

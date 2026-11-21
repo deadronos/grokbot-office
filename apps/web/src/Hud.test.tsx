@@ -220,3 +220,49 @@ describe("asset credit", () => {
     expect(html).toMatch(/href="https:\/\/kenney\.nl"/);
   });
 });
+
+const stylesheet = () =>
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "styles.css"), "utf8");
+
+describe("bounded wide panel", () => {
+  it("makes the sections bounded columns and their lists the scrolling part", () => {
+    // The suite has no layout engine: this CSS contract is the layout proof, so a
+    // section can no longer shrink under its list and let it paint over the credit.
+    const text = stylesheet();
+    const section = /(?:^|\n)\.hud-section \{([^}]*)\}/.exec(text)?.[1] ?? "";
+    expect(section).toContain("display: flex");
+    expect(section).toContain("flex-direction: column");
+    expect(section).toContain("min-height: 0");
+
+    const lists = /(?:^|\n)\.hud-bots,\n\.hud-events \{([^}]*)\}/.exec(text)?.[1] ?? "";
+    expect(lists).toContain("flex: 1 1 auto");
+    expect(lists).toContain("min-height: 0");
+    expect(lists).toContain("overflow-y: auto");
+
+    const credit = text.slice(text.indexOf("\n.hud-credit {")).split("}")[0] ?? "";
+    expect(credit).toContain("flex: none");
+  });
+
+  it("keeps the panel inside its max height with a full roster and feed", () => {
+    const bots = Object.fromEntries(
+      Array.from({ length: 10 }, (_, index) => {
+        const id = `bot-${index}`;
+        return [id, bot({ id, name: `Bot ${index}` })];
+      }),
+    );
+    const events = Array.from({ length: 20 }, (_, index) => event(index + 1));
+    const markup = renderToStaticMarkup(
+      <HudView bots={bots} events={events} now={Date.parse(AT)} variant="wide" />,
+    );
+
+    expect(markup).toContain("hud hud-wide");
+    expect(markup).toContain("max-height:55vh");
+    // Both sections carry their own heading, list and the credit stays a sibling.
+    expect(markup.match(/class="hud-section"/g)).toHaveLength(2);
+    expect(markup.match(/class="hud-bot"/g)).toHaveLength(10);
+    expect(markup.match(/class="hud-event"/g)).toHaveLength(20);
+    expect(markup.indexOf('class="hud-credit"')).toBeGreaterThan(
+      markup.indexOf('class="hud-events"'),
+    );
+  });
+});

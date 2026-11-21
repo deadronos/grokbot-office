@@ -688,6 +688,35 @@ describe("GET /api/events", () => {
       expect(body).toMatchObject({ nextSince: 5, hasMore: false, lastSeq: 5 });
     });
 
+    it("keeps a hidden bot's offline heartbeat event out of history", async () => {
+      const { app, repo, viewerToken } = hiddenSetup();
+      repo.setBotStatus({
+        botId: "ghost",
+        status: "idle",
+        label: null,
+        taskId: null,
+        handoffTo: null,
+        handoffId: null,
+        labelHandoffId: null,
+        since: NOW,
+        lastHeartbeatAt: NOW,
+        lastEventSeq: null,
+      });
+      const ghostToken = issueToken(repo, { kind: "bot", botId: "ghost" }).token;
+      const beat = await app.request("/api/bots/ghost/heartbeat", {
+        method: "POST",
+        headers: { ...auth(ghostToken), "content-type": "application/json" },
+        body: JSON.stringify({ status: "offline" }),
+      });
+      expect(beat.status).toBe(204);
+      // Logged for the office to replay, never visible to a viewer.
+      expect(repo.listEventsSince(0).map((row) => row.type)).toEqual(["offline"]);
+
+      const text = await (await getEvents(app, viewerToken)).text();
+      expect(text).not.toContain("ghost");
+      expect((JSON.parse(text) as EventsPage).events).toEqual([]);
+    });
+
     it("pages past runs of hidden events without stalling", async () => {
       const { app, dataToken, viewerToken, ghostEvents } = hiddenSetup();
       await post(app, dataToken, batch(ev(1, "status_changed", { status: "working" })));
@@ -851,6 +880,81 @@ describe("GET /api/events", () => {
         )
       ).json()) as EventsPage;
       expect(body.events).toEqual([]);
+    });
+
+    it("accepts the viewer's seven-day window and refuses a wider one", async () => {
+      const context = windowSetup();
+      const sevenDays = await page(context, {
+        from: AT_00,
+        to: "2026-01-08T00:00:00.000Z",
+        limit: "500",
+      });
+      expect(sevenDays.res.status).toBe(200);
+      expect(seqs(sevenDays.body)).toEqual([1, 2, 3]);
+
+      // Exactly eight days is the cap; a millisecond more is a caller error.
+      const widest = await page(context, { from: AT_00, to: "2026-01-09T00:00:00.000Z" });
+      expect(widest.res.status).toBe(200);
+      const tooWide = await page(context, { from: AT_00, to: "2026-01-09T00:00:00.001Z" });
+      expect(tooWide.res.status).toBe(400);
+      expect(tooWide.body).toEqual({ error: "invalid query" });
+    });
+
+    it("keeps the page-size cap inside a window", async () => {
+      const context = windowSetup();
+      const { res, body } = await page(context, { from: AT_00, to: AT_05, limit: "501" });
+      expect(res.status).toBe(400);
+      expect(body).toEqual({ error: "invalid query" });
+    });
+
+    const DAY = `?from=${encodeURIComponent(AT_00)}&to=${encodeURIComponent(AT_04)}`;
+
+    it("keeps a handoff to a hidden bot out of a window", async () => {
+      const { app, repo, viewerToken } = hiddenSetup();
+      // Hidden is display-only: data can still hand to ghost, and must not see it back.
+      repo.applyEvents(
+        "data",
+        [
+          ev(1, "handoff_sent", { to: "ghost", handoffId: "h-in", label: "token rollout" }),
+        ] as never,
+        NOW,
+      );
+      const res = await getEvents(app, viewerToken, DAY);
+      const text = await res.text();
+      expect((JSON.parse(text) as EventsPage).events).toEqual([]);
+      expect(text).not.toContain("ghost");
+      expect(text).not.toContain("h-in");
+    });
+
+    it("keeps a handoff from a hidden bot out of a window", async () => {
+      const { app, viewerToken, ghostEvents } = hiddenSetup();
+      ghostEvents(
+        ghost(1, "handoff_sent", { to: "data", handoffId: "h-secret", label: "classified" }),
+      );
+      const text = await (await getEvents(app, viewerToken, DAY)).text();
+      expect((JSON.parse(text) as EventsPage).events).toEqual([]);
+      for (const secret of SECRETS) expect(text).not.toContain(secret);
+    });
+
+    it("scrubs a hidden handoff id from a windowed page", async () => {
+      const { app, repo, viewerToken, ghostEvents } = hiddenSetup();
+      ghostEvents(
+        ghost(1, "handoff_sent", { to: "data", handoffId: "h-secret", label: "classified" }),
+      );
+      // data's accept is visible; the id it carries still belongs to ghost's handoff.
+      repo.applyEvents(
+        "data",
+        [ev(2, "handoff_accepted", { handoffId: "h-secret", taskId: "classify" })] as never,
+        NOW,
+      );
+      const text = await (await getEvents(app, viewerToken, DAY)).text();
+      const body = JSON.parse(text) as EventsPage;
+      expect(body.events.map((event) => [event.seq, event.botId, event.type])).toEqual([
+        [2, "data", "handoff_accepted"],
+      ]);
+      expect(body.events[0]?.handoffId ?? null).toBeNull();
+      expect(text).not.toContain("h-secret");
+      expect(text).not.toContain("ghost");
     });
 
     const invalid = [

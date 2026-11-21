@@ -1,9 +1,11 @@
 import type { BotSnapshot, StreamEvent } from "@grokbot-office/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { formatSince } from "../Hud";
 import { useOfficeStore } from "../store/officeStore";
 import { useHistoryStore } from "./historyStore";
-import { localDayKey } from "./time";
+import { localDayKey, localDayBounds } from "./time";
+import { selectHistoryNow } from "./useViewed";
 
 const today = localDayKey(new Date());
 
@@ -70,6 +72,49 @@ describe("history store", () => {
     expect(state.replay.events).toHaveLength(2);
     expect(state.stats.days.find((day) => day.day === today)?.count).toBe(1);
     expect(state.loading).toBe(false);
+  });
+
+  it("starts from a bot's last status before the day and ages against the scrub", async () => {
+    useOfficeStore.setState({ bots: { data: rosterBot } });
+    const evening = new Date();
+    evening.setDate(evening.getDate() - 1);
+    evening.setHours(22, 0, 0, 0);
+    stubFetch([{ seq: 1, botId: "data", type: "offline", receivedAt: evening.toISOString() }]);
+
+    await useHistoryStore.getState().enter();
+
+    const state = useHistoryStore.getState();
+    // A quiet day has no events to scrub, so the playhead is the day's start.
+    expect(state.dayEvents).toEqual([]);
+    expect(state.playhead).toBe(-1);
+    expect(state.replay.bots.data).toMatchObject({
+      status: "offline",
+      since: evening.toISOString(),
+    });
+    const now = selectHistoryNow(state);
+    expect(now).toBe(Date.parse(localDayBounds(today).from));
+    expect(formatSince(state.replay.bots.data!.since, now)).toBe("2h");
+  });
+
+  it("replays an explicit offline heartbeat as offline, aged from the scrub time", async () => {
+    useOfficeStore.setState({ bots: { data: rosterBot } });
+    stubFetch([
+      event(1, 10, { type: "task_started", label: "Build", taskId: "t1" }),
+      event(2, 14, { type: "offline" }),
+      event(3, 16, { botId: "wesley", type: "status_changed", status: "idle" }),
+    ]);
+
+    await useHistoryStore.getState().enter();
+
+    const state = useHistoryStore.getState();
+    expect(state.playhead).toBe(2);
+    // The offline event sticks, and the scrub time (not the wall clock) ages it.
+    expect(state.replay.bots.data).toMatchObject({ status: "offline", since: at(14) });
+    expect(formatSince(state.replay.bots.data!.since, selectHistoryNow(state))).toBe("2h");
+
+    // Stepping before the offline event: still online, as the day began.
+    useHistoryStore.getState().stepBy(-2);
+    expect(useHistoryStore.getState().replay.bots.data?.status).toBe("working");
   });
 
   it("scrubs, steps, and clamps inside the day", async () => {

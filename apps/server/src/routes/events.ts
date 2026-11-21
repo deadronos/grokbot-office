@@ -13,6 +13,11 @@ import { toStreamEvent } from "./mappers.ts";
 
 const EVENTS_LIMIT_DEFAULT = 100;
 const EVENTS_LIMIT_MAX = 500;
+/**
+ * Widest accepted window: the viewer's stats read spans seven local days, plus
+ * room for DST shifts. A wider window is a caller error, not a slow query.
+ */
+const EVENTS_WINDOW_MAX_MS = 8 * 24 * 60 * 60 * 1000;
 
 /**
  * Query values are canonical digit strings: `Number("")` is 0, so empty input must
@@ -53,6 +58,13 @@ function parseEventsQuery(
   const { from, to } = parsed.data;
   // The window is half-open: an empty or reversed range is a caller error.
   if (from !== undefined && to !== undefined && from >= to) return undefined;
+  if (
+    from !== undefined &&
+    to !== undefined &&
+    Date.parse(to) - Date.parse(from) > EVENTS_WINDOW_MAX_MS
+  ) {
+    return undefined;
+  }
   return {
     since: parsed.data.since ?? 0,
     limit: parsed.data.limit ?? EVENTS_LIMIT_DEFAULT,
