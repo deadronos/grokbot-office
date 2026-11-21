@@ -8,12 +8,12 @@ import { DESK_STATIONS, type DeskStation } from "./deskStations";
 import {
   PACKET_SIZE,
   deskStation,
+  liveSendsFromEvents,
   packetPose,
   settlePackets,
   syncPackets,
   trayCount,
   traySlotPoint,
-  traySlots,
   type PacketTimeline,
 } from "./handoffPackets";
 
@@ -22,9 +22,10 @@ const TRAY_INSET = "#232a35";
 const BADGE_RADIUS = 0.13;
 
 /**
- * Tracks handoff packets from the store: a new live `handoff_sent` flies (the
- * store's `handoffFlash` is the live signal, consumed once), handoffs already
- * open at connect start in the tray, and an accept lifts the packet out.
+ * Tracks handoff packets from the store: a live `handoff_sent` newer than the
+ * last consumed seq flies (keyed by handoff id, so a replay batch flies each
+ * one), handoffs already open at connect start in the tray, and an accept
+ * lifts the packet out from wherever it is.
  */
 export function useHandoffPackets(reducedMotion: boolean): {
   packets: PacketTimeline[];
@@ -34,25 +35,32 @@ export function useHandoffPackets(reducedMotion: boolean): {
   const [packets, setPackets] = useState<PacketTimeline[]>([]);
   // The frame loop must see the newest packets without re-subscribing each frame.
   const packetsRef = useRef<PacketTimeline[]>(packets);
+  // Everything already in the store when this first runs is snapshot history.
+  const consumedSeqRef = useRef<number | null>(null);
 
   useEffect(() => {
     const now = performance.now();
-    const previous = packetsRef.current;
-    const flash = useOfficeStore.getState().handoffFlash;
-    const liveSends = new Map<string, number>();
-    if (flash) {
-      // The beam is gone: this hook is now the one consumer of the flash.
-      if (!reducedMotion) {
-        for (const handoff of openHandoffs) {
-          const known = previous.some((packet) => packet.handoffId === handoff.id);
-          if (!known && handoff.fromBotId === flash.from && handoff.toBotId === flash.to) {
-            liveSends.set(handoff.id, now);
-          }
-        }
-      }
-      useOfficeStore.getState().clearHandoffFlash();
-    }
-    const next = syncPackets({ previous, openHandoffs, liveSends, now, reducedMotion });
+    const state = useOfficeStore.getState();
+    const newestEventSeq = state.events.reduce((max, event) => Math.max(max, event.seq), 0);
+    // A snapshot can land with a lastEventSeq past the feed (its seed arrives
+    // after): treat that gap as already seen, or its old sends would fly.
+    const consumed = consumedSeqRef.current ?? state.lastEventSeq;
+    const lastConsumedSeq = state.lastEventSeq > newestEventSeq ? state.lastEventSeq : consumed;
+    const live = liveSendsFromEvents({
+      events: state.events,
+      lastConsumedSeq,
+      now,
+      reducedMotion,
+    });
+    consumedSeqRef.current = Math.max(live.lastConsumedSeq, newestEventSeq);
+    if (state.handoffFlash) state.clearHandoffFlash();
+    const next = syncPackets({
+      previous: packetsRef.current,
+      openHandoffs,
+      liveSends: live.liveSends,
+      now,
+      reducedMotion,
+    });
     packetsRef.current = next;
     setPackets(next);
   }, [openHandoffs, reducedMotion]);
@@ -176,7 +184,6 @@ export function HandoffPackets({
   reducedMotion: boolean;
 }) {
   const openHandoffs = useOfficeStore((state) => state.openHandoffs);
-  const slots = useMemo(() => traySlots(packets), [packets]);
 
   useFrame(() => settle(performance.now()));
 
@@ -192,7 +199,7 @@ export function HandoffPackets({
         <Packet
           key={packet.handoffId}
           packet={packet}
-          slot={slots.get(packet.handoffId) ?? 0}
+          slot={packet.slot}
           reducedMotion={reducedMotion}
         />
       ))}

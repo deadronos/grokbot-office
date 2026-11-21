@@ -1,4 +1,4 @@
-import type { Handoff } from "@grokbot-office/shared";
+import type { Handoff, StreamEvent } from "@grokbot-office/shared";
 import { describe, expect, it } from "vitest";
 
 import { DESK_STATIONS, type DeskStation } from "./deskStations";
@@ -6,6 +6,7 @@ import {
   PACKET_ARC_HEIGHT,
   PACKET_FLIGHT_MS,
   PACKET_PICKUP_MS,
+  liveSendsFromEvents,
   packetPhase,
   packetPose,
   packetPosition,
@@ -52,7 +53,23 @@ function packet(
   toBotId: string,
   overrides: Partial<PacketTimeline> = {},
 ): PacketTimeline {
-  return { handoffId, fromBotId, toBotId, sentAt: null, acceptedAt: null, ...overrides };
+  return { handoffId, fromBotId, toBotId, sentAt: null, acceptedAt: null, slot: 0, ...overrides };
+}
+
+function sentEvent(
+  seq: number,
+  fromBotId: string,
+  toBotId: string,
+  handoffId: string,
+): StreamEvent {
+  return {
+    seq,
+    botId: fromBotId,
+    type: "handoff_sent",
+    handoffId,
+    to: toBotId,
+    receivedAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 
 describe("packet flight", () => {
@@ -135,10 +152,10 @@ describe("packet lifecycle", () => {
     expect(packetPose(landed, from, to, 0, 0, false)).toEqual(traySlotPoint(to, 0));
   });
 
-  it("picks up on accept and is gone after the pickup", () => {
+  it("picks up a landed packet from its tray and is gone after the pickup", () => {
     const to = station("wesley");
     const tray = traySlotPoint(to, 0);
-    const accepted = packet("h1", "data", "wesley", { sentAt: 0, acceptedAt: 1_000 });
+    const accepted = packet("h1", "data", "wesley", { acceptedAt: 1_000 });
     expect(packetPhase(accepted, 1_000, false)).toBe("picking");
     expect(packetPose(accepted, station("data"), to, 0, 1_000, false)).toEqual(tray);
 
@@ -154,11 +171,38 @@ describe("packet lifecycle", () => {
     ).toBeNull();
   });
 
-  it("skips the rest of a flight if the accept arrives mid-air", () => {
+  it("continues a mid-air accept from where the packet is", () => {
+    const from = station("data");
     const to = station("wesley");
+    const tray = traySlotPoint(to, 0);
     const accepted = packet("h1", "data", "wesley", { sentAt: 0, acceptedAt: 300 });
+    const arc = packetPosition(packetStartPoint(from), tray, 300 / PACKET_FLIGHT_MS);
+
     expect(packetPhase(accepted, 300, false)).toBe("picking");
-    expect(packetPose(accepted, station("data"), to, 0, 300, false)).toEqual(traySlotPoint(to, 0));
+    // The pickup starts where the arc was, not back at the tray.
+    expectClose(packetPose(accepted, from, to, 0, 300, false)!, arc);
+    expect(packetPose(accepted, from, to, 0, 300, false)).not.toEqual(tray);
+
+    const half = packetPose(accepted, from, to, 0, 300 + PACKET_PICKUP_MS / 2, false)!;
+    const seat = to.bot.position;
+    const distance = (point: [number, number, number]) =>
+      Math.hypot(point[0] - seat[0], point[1] - seat[1], point[2] - seat[2]);
+    expect(distance(half)).toBeLessThan(distance(arc));
+
+    expect(packetPhase(accepted, 300 + PACKET_PICKUP_MS, false)).toBe("gone");
+    expect(packetPose(accepted, from, to, 0, 300 + PACKET_PICKUP_MS, false)).toBeNull();
+  });
+
+  it("falls back to the tray when the accept lands after the flight", () => {
+    const from = station("data");
+    const to = station("wesley");
+    const accepted = packet("h1", "data", "wesley", {
+      sentAt: 0,
+      acceptedAt: PACKET_FLIGHT_MS + 200,
+    });
+    expect(packetPose(accepted, from, to, 0, PACKET_FLIGHT_MS + 200, false)).toEqual(
+      traySlotPoint(to, 0),
+    );
   });
 
   it("snaps under reduced motion: send is already in the tray, accept is gone", () => {
@@ -285,6 +329,127 @@ describe("concurrent packets", () => {
         reducedMotion: true,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("live sends from the event feed", () => {
+  it("ignores handoffs a snapshot already brought in", () => {
+    const events = [sentEvent(4, "data", "wesley", "h1"), sentEvent(5, "geordi", "wesley", "h2")];
+    const { liveSends, lastConsumedSeq } = liveSendsFromEvents({
+      events,
+      lastConsumedSeq: 5,
+      now: 100,
+      reducedMotion: false,
+    });
+    expect(liveSends.size).toBe(0);
+    expect(lastConsumedSeq).toBe(5);
+
+    // A leftover {data → wesley} flash must not launch the open pair either.
+    const packets = syncPackets({
+      previous: [],
+      openHandoffs: [handoff("h1", "data", "wesley"), handoff("h2", "geordi", "wesley")],
+      liveSends,
+      now: 100,
+      reducedMotion: false,
+    });
+    expect(packets.every((entry) => entry.sentAt === null)).toBe(true);
+  });
+
+  it("starts a flight for every handoff in a synchronous replay batch", () => {
+    const events = [
+      sentEvent(1, "data", "wesley", "h1"),
+      sentEvent(2, "geordi", "wesley", "h2"),
+      // Same pair as h1, and an opposite direction: each is its own flight.
+      sentEvent(3, "data", "wesley", "h3"),
+      sentEvent(4, "wesley", "data", "h4"),
+    ];
+    const { liveSends } = liveSendsFromEvents({
+      events,
+      lastConsumedSeq: 0,
+      now: 50,
+      reducedMotion: false,
+    });
+    expect([...liveSends.keys()].toSorted()).toEqual(["h1", "h2", "h3", "h4"]);
+    for (const startedAt of liveSends.values()) expect(startedAt).toBe(50);
+  });
+
+  it("consumes only events newer than the last consumed seq", () => {
+    const events = [
+      sentEvent(7, "data", "wesley", "h1"),
+      sentEvent(8, "geordi", "wesley", "h2"),
+      sentEvent(9, "data", "wesley", "h3"),
+    ];
+    const { liveSends, lastConsumedSeq } = liveSendsFromEvents({
+      events,
+      lastConsumedSeq: 7,
+      now: 10,
+      reducedMotion: false,
+    });
+    // The earlier h1 is already seen; the newer two fly.
+    expect([...liveSends.keys()].toSorted()).toEqual(["h2", "h3"]);
+    expect(lastConsumedSeq).toBe(9);
+  });
+
+  it("consumes without flying under reduced motion", () => {
+    const events = [sentEvent(3, "data", "wesley", "h1"), sentEvent(4, "data", "data", "h2")];
+    const { liveSends, lastConsumedSeq } = liveSendsFromEvents({
+      events,
+      lastConsumedSeq: 2,
+      now: 10,
+      reducedMotion: true,
+    });
+    expect(liveSends.size).toBe(0);
+    expect(lastConsumedSeq).toBe(4);
+  });
+
+  it("ignores sends without a handoff id and other events", () => {
+    const events: StreamEvent[] = [
+      sentEvent(5, "data", "wesley", "h1"),
+      { ...sentEvent(6, "data", "wesley", "h2"), handoffId: undefined },
+      { ...sentEvent(7, "data", "wesley", "h3"), type: "handoff_accepted" },
+    ];
+    const { liveSends } = liveSendsFromEvents({
+      events,
+      lastConsumedSeq: 4,
+      now: 0,
+      reducedMotion: false,
+    });
+    expect([...liveSends.keys()]).toEqual(["h1"]);
+  });
+});
+
+describe("stable tray slots", () => {
+  const h1 = packet("h1", "data", "wesley", { sentAt: 1 });
+  const h2 = packet("h2", "geordi", "wesley", { sentAt: 2 });
+  const h3 = packet("h3", "lumi", "wesley", { sentAt: 3 });
+
+  it("keeps landed slots when the middle packet leaves", () => {
+    const before = traySlots([h1, h2, h3]);
+    expect([before.get("h1"), before.get("h2"), before.get("h3")]).toEqual([0, 1, 2]);
+
+    const after = traySlots([h1, h3], before);
+    expect(after.get("h1")).toBe(0);
+    expect(after.get("h3")).toBe(2);
+  });
+
+  it("lets a new packet reuse a freed slot without moving the others", () => {
+    const before = traySlots([h1, h2, h3]);
+    const after = traySlots([h1, h3], before);
+    const h4 = packet("h4", "wesley", "geordi", { sentAt: 4 });
+    const h5 = packet("h5", "data", "wesley", { sentAt: 5 });
+    const next = traySlots([h1, h3, h5], after);
+    expect(next.get("h1")).toBe(0);
+    expect(next.get("h3")).toBe(2);
+    expect(next.get("h5")).toBe(1);
+    // Another desk keeps its own numbering.
+    expect(traySlots([h4]).get("h4")).toBe(0);
+  });
+
+  it("numbers a fresh tray from scratch, snapshot packets first", () => {
+    const snapshot = packet("s1", "data", "wesley");
+    const slots = traySlots([h2, snapshot]);
+    expect(slots.get("s1")).toBe(0);
+    expect(slots.get("h2")).toBe(1);
   });
 });
 
